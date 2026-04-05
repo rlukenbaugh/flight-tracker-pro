@@ -4,8 +4,13 @@
   "version": "1.0.0",
   "description": "Premium flight intelligence desktop app for Windows.",
   "author": "rlukenbaugh",
+  "homepage": "https://github.com/rlukenbaugh/flight-tracker-pro",
   "main": "electron/main.mjs",
   "productName": "Flight Tracker Pro",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rlukenbaugh/flight-tracker-pro.git"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,9 +18,10 @@
     "build": "tsc -b && vite build",
     "desktop": "electron .",
     "dist:win": "npm run generate:icons && npm run build && electron-builder --win nsis portable",
-    "publish:win": "npm run generate:icons && npm run build && electron-builder --win nsis --publish always",
+    "publish:win": "npm run generate:icons && npm run build && electron-builder --win nsis portable --publish always",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "release:notes": "node scripts/render-release-notes.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.101.1",
@@ -72,10 +78,10 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "artifactName": "${productName}-Setup-${version}-${arch}.${ext}"
+      "artifactName": "Flight-Tracker-Pro-Setup-${version}-${arch}.${ext}"
     },
     "portable": {
-      "artifactName": "${productName}-Portable-${version}-${arch}.${ext}"
+      "artifactName": "Flight-Tracker-Pro-Portable-${version}-${arch}.${ext}"
     }
   }
 }

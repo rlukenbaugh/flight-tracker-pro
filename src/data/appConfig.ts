@@ -1,5 +1,10 @@
 import type { AlertPreference, PremiumPlan } from '../types'
 
+export const desktopReleaseLinks = {
+  repoUrl: 'https://github.com/rlukenbaugh/flight-tracker-pro',
+  latestReleaseUrl: 'https://github.com/rlukenbaugh/flight-tracker-pro/releases/latest',
+}
+
 export const defaultAlertPreference: AlertPreference = {
   priceDrops: true,
   directFlightAvailable: true,

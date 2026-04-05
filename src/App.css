@@ -964,6 +964,19 @@
   margin-top: 20px;
 }
 
+.about-link-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.about-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
 .next-steps-panel {
   margin-top: 6px;
 }

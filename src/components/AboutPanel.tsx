@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { desktopReleaseLinks } from '../data/appConfig'
 import type { DesktopAppInfo, DesktopBridge } from '../types'
 
 const webFallback: DesktopAppInfo = {
@@ -21,6 +22,10 @@ function desktopBridge(): DesktopBridge | undefined {
 export function AboutPanel() {
   const [appInfo, setAppInfo] = useState<DesktopAppInfo>(webFallback)
   const [isChecking, setIsChecking] = useState(false)
+  const releaseNotesUrl =
+    appInfo.version === 'web-preview'
+      ? desktopReleaseLinks.latestReleaseUrl
+      : `${desktopReleaseLinks.repoUrl}/releases/tag/v${appInfo.version}`
 
   useEffect(() => {
     const bridge = desktopBridge()
@@ -85,9 +90,32 @@ export function AboutPanel() {
       <p className="about-copy">{appInfo.updateMessage}</p>
 
       <div className="about-actions">
-        <button type="button" className="primary-button subtle" onClick={handleCheckForUpdates} disabled={isChecking}>
+        <button
+          type="button"
+          className="primary-button subtle"
+          onClick={handleCheckForUpdates}
+          disabled={isChecking}
+        >
           {isChecking ? 'Checking for updates...' : 'Check for updates'}
         </button>
+        <div className="about-link-row">
+          <a
+            className="ghost-button about-link"
+            href={desktopReleaseLinks.latestReleaseUrl}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Download latest build
+          </a>
+          <a
+            className="ghost-button about-link"
+            href={releaseNotesUrl}
+            target="_blank"
+            rel="noreferrer"
+          >
+            View release notes
+          </a>
+        </div>
         <span className="plan-hint">
           {appInfo.desktop
             ? 'Published GitHub releases will be discovered automatically in packaged builds.'

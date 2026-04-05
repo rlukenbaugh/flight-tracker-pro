@@ -46,8 +46,8 @@ npm run dist:win
 
 Current Windows artifacts are written to:
 
-- `release/Flight Tracker Pro-Setup-1.0.0-x64.exe`
-- `release/Flight Tracker Pro-Portable-1.0.0-x64.exe`
+- `release/Flight-Tracker-Pro-Setup-1.0.0-x64.exe`
+- `release/Flight-Tracker-Pro-Portable-1.0.0-x64.exe`
 
 ## Environment setup
 
@@ -103,6 +103,28 @@ npm run publish:win
 ```
 
 That command builds the app, packages the Windows installer, and publishes the release artifacts to GitHub Releases so packaged clients can discover updates.
+
+## GitHub Actions Desktop Releases
+
+The repo now includes a Windows release workflow at `.github/workflows/desktop-release.yml`.
+
+Recommended release flow:
+
+1. Bump the version in `package.json`.
+2. Push a matching git tag such as `v1.0.1`, or trigger the workflow manually from GitHub Actions.
+3. The workflow will:
+   - run `npm ci`
+   - lint the app
+   - build and publish the signed Windows release
+   - upload the portable `.exe`
+   - apply polished GitHub release notes
+
+Repository secrets required for signed CI releases:
+
+- `CSC_LINK`
+- `CSC_KEY_PASSWORD`
+
+`CSC_LINK` can be a secure file URL or base64-encoded `.pfx` payload, which matches the current electron-builder guidance for Windows CI signing.
 
 ## Notes
 

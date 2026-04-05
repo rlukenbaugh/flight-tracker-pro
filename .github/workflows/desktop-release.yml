@@ -1,0 +1,85 @@
+name: Desktop Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-windows:
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Validate signing secrets
+        shell: pwsh
+        run: |
+          if (-not $env:CSC_LINK) {
+            throw "Missing CSC_LINK. Add a base64-encoded PFX or secure file URL in repository secrets."
+          }
+
+          if (-not $env:CSC_KEY_PASSWORD) {
+            throw "Missing CSC_KEY_PASSWORD. Add the certificate password in repository secrets."
+          }
+
+      - name: Validate tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          $expectedTag = "v$version"
+          if ($expectedTag -ne "${{ github.ref_name }}") {
+            throw "Tag ${{ github.ref_name }} does not match package.json version $version."
+          }
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build desktop release and publish assets
+        run: npm run publish:win
+
+      - name: Generate release notes
+        shell: pwsh
+        run: node scripts/render-release-notes.mjs --out release-notes.md
+
+      - name: Ensure portable asset is attached
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          $tag = "v$version"
+          $portable = "release/Flight-Tracker-Pro-Portable-$version-x64.exe"
+          gh release upload $tag $portable --repo $env:GITHUB_REPOSITORY --clobber
+
+      - name: Apply polished release notes
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          $tag = "v$version"
+          gh release edit $tag `
+            --repo $env:GITHUB_REPOSITORY `
+            --title "Flight Tracker Pro v$version" `
+            --notes-file release-notes.md

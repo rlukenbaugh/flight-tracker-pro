@@ -15,8 +15,8 @@ Use this checklist before publishing a new Windows build of Flight Tracker Pro.
 - Run `npm run build`
 - Run `npm run dist:win`
 - Confirm these files exist in `release/`:
-  - `Flight Tracker Pro-Setup-<version>-x64.exe`
-  - `Flight Tracker Pro-Portable-<version>-x64.exe`
+  - `Flight-Tracker-Pro-Setup-<version>-x64.exe`
+  - `Flight-Tracker-Pro-Portable-<version>-x64.exe`
   - `latest.yml`
 
 ## Credentials and signing
