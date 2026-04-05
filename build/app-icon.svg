@@ -1,0 +1,14 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="512" height="512" rx="128" fill="#07111F"/>
+  <circle cx="372" cy="138" r="98" fill="url(#glow)"/>
+  <path d="M124 332C124 302.177 148.177 278 178 278H311L409 155C418 144 433 139 447 142L458 145C469 147 476 158 474 169C473 176 469 183 463 187L369 259L432 275C445 278 454 291 451 304L449 314C446 328 433 337 419 334L320 313L260 384C252 393 241 398 229 398H182C171 398 162 390 162 379C162 375 163 371 165 368L219 278H178C148.177 278 124 302.177 124 332Z" fill="#F5F9FF"/>
+  <path d="M117 366C117 351.641 128.641 340 143 340H245L219 384H143C128.641 384 117 372.359 117 358V366Z" fill="#5EE4D0"/>
+  <path d="M156 229C156 213.536 168.536 201 184 201H262C277.464 201 290 213.536 290 229V244H156V229Z" fill="#163050"/>
+  <path d="M156 244H330C342.15 244 352 253.85 352 266C352 278.15 342.15 288 330 288H156V244Z" fill="#79D1FF"/>
+  <defs>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(372 138) rotate(90) scale(98)">
+      <stop stop-color="#58A7FF"/>
+      <stop offset="1" stop-color="#58A7FF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+</svg>

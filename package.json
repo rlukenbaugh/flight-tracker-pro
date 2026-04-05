@@ -1,0 +1,81 @@
+{
+  "name": "flight-tracker-pro",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Premium flight intelligence desktop app for Windows.",
+  "author": "rlukenbaugh",
+  "main": "electron/main.mjs",
+  "productName": "Flight Tracker Pro",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "generate:icons": "node scripts/generate-icons.mjs",
+    "build": "tsc -b && vite build",
+    "desktop": "electron .",
+    "dist:win": "npm run generate:icons && npm run build && electron-builder --win nsis portable",
+    "publish:win": "npm run generate:icons && npm run build && electron-builder --win nsis --publish always",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.101.1",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@types/node": "^24.12.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "electron": "^41.1.1",
+    "electron-builder": "^26.8.1",
+    "electron-updater": "^6.8.3",
+    "eslint": "^9.39.4",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.4.0",
+    "png-to-ico": "^3.0.1",
+    "sharp": "^0.34.5",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.57.0",
+    "vite": "^8.0.1"
+  },
+  "build": {
+    "appId": "com.rlukenbaugh.flighttrackerpro",
+    "productName": "Flight Tracker Pro",
+    "directories": {
+      "output": "release"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "rlukenbaugh",
+      "repo": "flight-tracker-pro",
+      "releaseType": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "build/icons/**/*",
+      "package.json"
+    ],
+    "win": {
+      "icon": "build/icons/icon.ico",
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "artifactName": "${productName}-Setup-${version}-${arch}.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName}-Portable-${version}-${arch}.${ext}"
+    }
+  }
+}
