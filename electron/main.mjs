@@ -1,5 +1,4 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
-import { autoUpdater } from 'electron-updater'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -9,10 +8,28 @@ const updaterState = {
   status: 'idle',
   message: 'Automatic update checks are available in packaged builds.',
 }
+let cachedAutoUpdater = null
 
 function setUpdaterState(status, message) {
   updaterState.status = status
   updaterState.message = message
+}
+
+async function loadAutoUpdater() {
+  if (cachedAutoUpdater) {
+    return cachedAutoUpdater
+  }
+
+  try {
+    const { autoUpdater } = await import('electron-updater')
+    cachedAutoUpdater = autoUpdater
+    return autoUpdater
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown updater import error.'
+    setUpdaterState('error', `Updater module unavailable: ${message}`)
+    console.error('Unable to load electron-updater:', error)
+    return null
+  }
 }
 
 function getDesktopAppInfo() {
@@ -32,6 +49,11 @@ async function runUpdateCheck() {
     return getDesktopAppInfo()
   }
 
+  const autoUpdater = await loadAutoUpdater()
+  if (!autoUpdater) {
+    return getDesktopAppInfo()
+  }
+
   setUpdaterState('checking', 'Checking GitHub Releases for a newer desktop build.')
 
   try {
@@ -44,9 +66,14 @@ async function runUpdateCheck() {
   return getDesktopAppInfo()
 }
 
-function configureAutoUpdates() {
+async function configureAutoUpdates() {
   if (!app.isPackaged) {
     setUpdaterState('unavailable', 'Install a packaged build to test GitHub release updates.')
+    return
+  }
+
+  const autoUpdater = await loadAutoUpdater()
+  if (!autoUpdater) {
     return
   }
 
@@ -137,7 +164,7 @@ app.whenReady().then(() => {
   ipcMain.handle('desktop:get-app-info', () => getDesktopAppInfo())
   ipcMain.handle('desktop:check-for-updates', () => runUpdateCheck())
   createWindow()
-  configureAutoUpdates()
+  void configureAutoUpdates()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

@@ -1,7 +1,7 @@
 {
   "name": "flight-tracker-pro",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Premium flight intelligence desktop app for Windows.",
   "author": "rlukenbaugh",
   "homepage": "https://github.com/rlukenbaugh/flight-tracker-pro",
@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.101.1",
+    "electron-updater": "^6.8.3",
     "react": "^19.2.4",
     "react-dom": "^19.2.4"
   },
@@ -36,7 +37,6 @@
     "@vitejs/plugin-react": "^6.0.1",
     "electron": "^41.1.1",
     "electron-builder": "^26.8.1",
-    "electron-updater": "^6.8.3",
     "eslint": "^9.39.4",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.5.2",
