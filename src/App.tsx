@@ -22,9 +22,11 @@ import {
   premiumPlans,
 } from './data/appConfig'
 import {
-  airportOptions,
+  airportSearchSuggestions,
   destinationExplorerByOrigin,
+  findAirportMatches,
   flightTemplates,
+  resolveAirportCode,
   routeInsights,
 } from './data/mockData'
 import {
@@ -143,6 +145,7 @@ function App() {
   )
   const [weatherSummary, setWeatherSummary] = useState<string>()
   const [weatherStatus, setWeatherStatus] = useState('Ready for live weather lookup.')
+  const [activeAirportField, setActiveAirportField] = useState<'origin' | 'destination'>('origin')
   const [isPending, startTransition] = useTransition()
 
   const activeRouteKey = getRouteKey(search.origin, search.destination)
@@ -163,6 +166,7 @@ function App() {
   const activeFilters = clampFilters(filters, priceCap)
   const rankedResults = sortFlights(filterFlights(availableResults, activeFilters), sortMode)
   const deferredResults = useDeferredValue(rankedResults)
+  const deferredAirportQuery = useDeferredValue(draftSearch[activeAirportField])
   const selectedFlight =
     deferredResults.find((flight) => flight.id === selectedFlightId) ?? deferredResults[0]
   const bestFlight = rankedResults[0]
@@ -174,6 +178,13 @@ function App() {
   const airlineOptions = Array.from(
     new Set(fallbackAirlineTemplates.map((flight) => flight.airline)),
   ).sort()
+  const airportSuggestions =
+    deferredAirportQuery.trim().length > 0
+      ? findAirportMatches(deferredAirportQuery, 10).map((airport) =>
+          [airport.city, airport.state].filter(Boolean).join(', ') +
+          ` (${airport.code}) - ${airport.airport}`,
+        )
+      : airportSearchSuggestions.slice(0, 40)
   const savedFlightsWithLivePrices = savedFlights.map((saved) => {
     const live = availableResults.find(
       (flight) =>
@@ -292,8 +303,8 @@ function App() {
     startTransition(() => {
       setSearch({
         ...nextSearch,
-        origin: nextSearch.origin.toUpperCase(),
-        destination: nextSearch.destination.toUpperCase(),
+        origin: resolveAirportCode(nextSearch.origin),
+        destination: resolveAirportCode(nextSearch.destination),
       })
       setSelectedFlightId('')
     })
@@ -539,18 +550,28 @@ function App() {
                 <span>Origin airport</span>
                 <input
                   list="airport-options"
+                  data-testid="origin-input"
                   value={draftSearch.origin}
-                  onChange={(event) => updateDraftSearch('origin', event.target.value.toUpperCase())}
+                  placeholder="Dallas, Heathrow, or DFW"
+                  onFocus={() => setActiveAirportField('origin')}
+                  onChange={(event) => {
+                    setActiveAirportField('origin')
+                    updateDraftSearch('origin', event.target.value)
+                  }}
                 />
               </label>
               <label>
                 <span>Destination airport</span>
                 <input
                   list="airport-options"
+                  data-testid="destination-input"
                   value={draftSearch.destination}
-                  onChange={(event) =>
-                    updateDraftSearch('destination', event.target.value.toUpperCase())
-                  }
+                  placeholder="Miami, Tokyo, or HND"
+                  onFocus={() => setActiveAirportField('destination')}
+                  onChange={(event) => {
+                    setActiveAirportField('destination')
+                    updateDraftSearch('destination', event.target.value)
+                  }}
                 />
               </label>
               <label>
@@ -612,7 +633,7 @@ function App() {
                 Searches can use curated mock fares or switch to a live provider path when the API
                 layer is configured.
               </p>
-              <button type="submit" className="primary-button">
+              <button type="submit" className="primary-button" data-testid="search-submit">
                 {isPending ? 'Refreshing route...' : 'Search flights'}
               </button>
             </div>
@@ -697,6 +718,7 @@ function App() {
               <span>Minimum</span>
               <input
                 type="range"
+                data-testid="price-min-range"
                 min="80"
                 max={String(priceCap)}
                 value={activeFilters.priceMin}
@@ -712,6 +734,7 @@ function App() {
               <span>Maximum</span>
               <input
                 type="range"
+                data-testid="price-max-range"
                 min="120"
                 max={String(priceCap)}
                 value={activeFilters.priceMax}
@@ -732,6 +755,7 @@ function App() {
             </div>
             <input
               type="range"
+              data-testid="duration-range"
               min="120"
               max="900"
               step="30"
@@ -850,7 +874,7 @@ function App() {
           <div className="results-toolbar">
             <div>
               <span className="eyebrow">Results View</span>
-              <h2>{resultsSummary}</h2>
+              <h2 data-testid="results-summary">{resultsSummary}</h2>
               <p>
                 Ranked by {sortOptions.find((option) => option.value === sortMode)?.label.toLowerCase()}.
                 {' '}
@@ -930,7 +954,7 @@ function App() {
             <PremiumPlansPanel plans={premiumPlans} />
           </div>
 
-          <section className="results-list">
+          <section className="results-list" data-testid="results-list">
             {deferredResults.length > 0 ? (
               deferredResults.map((flight) => (
                 <FlightCard
@@ -943,7 +967,7 @@ function App() {
                 />
               ))
             ) : (
-              <div className="panel empty-panel">
+              <div className="panel empty-panel" data-testid="empty-results">
                 <h3>No flights match this stack</h3>
                 <p>
                   Try widening the price range, allowing one stop, or switching to one of the map
@@ -979,7 +1003,7 @@ function App() {
       </main>
 
       <datalist id="airport-options">
-        {airportOptions.map((airport) => (
+        {airportSuggestions.map((airport) => (
           <option key={airport} value={airport} />
         ))}
       </datalist>

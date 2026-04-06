@@ -17,7 +17,14 @@ export function FlightCard({
   saved,
 }: FlightCardProps) {
   return (
-    <article className={`flight-card${selected ? ' selected' : ''}`}>
+    <article
+      className={`flight-card${selected ? ' selected' : ''}`}
+      data-testid="flight-card"
+      data-airline={flight.airline}
+      data-stops={String(flight.stops)}
+      data-refundable={String(flight.refundable)}
+      data-checked-bag={String(flight.checkedBagIncluded)}
+    >
       <div className="flight-card-top">
         <div>
           <div className="flight-meta">
