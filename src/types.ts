@@ -109,6 +109,17 @@ export interface DestinationPoint {
   summary: string
 }
 
+export interface AirportOption {
+  code: string
+  city: string
+  airport: string
+  country: string
+  state?: string
+  metro?: string
+  priority?: number
+  aliases?: string[]
+}
+
 export interface FlightResult {
   id: string
   templateId: string
