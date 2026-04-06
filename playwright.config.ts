@@ -16,6 +16,10 @@ export default defineConfig({
   webServer: {
     command: 'npm run dev -- --host 127.0.0.1 --port 4173',
     url: 'http://127.0.0.1:4173',
+    env: {
+      ...process.env,
+      VITE_ENABLE_LIVE_FLIGHTS: 'true',
+    },
     reuseExistingServer: true,
     timeout: 60_000,
   },

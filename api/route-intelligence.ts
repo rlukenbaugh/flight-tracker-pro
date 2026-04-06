@@ -1,5 +1,5 @@
 import { recordFareSnapshot } from './_database.js'
-import { fetchAmadeusJson, fetchAmadeusToken } from './_amadeus.js'
+import { createDuffelOfferRequest } from './_duffel.js'
 import {
   enforceRateLimit,
   json,
@@ -8,51 +8,50 @@ import {
   setCommonHeaders,
   validateDate,
   validateIataCode,
+  validateTravelerCount,
   validateTripType,
   withMemoryCache,
   type HandlerRequest,
   type HandlerResponse,
 } from './_http.js'
 
-type FlightDatesPayload = {
-  data?: Array<{
-    departureDate?: string
-    returnDate?: string
-    price?: { total?: string }
-  }>
+type CalendarPoint = {
+  date: string
+  price: number
 }
 
-type PriceMetricsPayload = {
-  data?: Array<{
-    priceMetrics?: Array<{
-      amount?: string
-      quartileRanking?: string
-    }>
-  }>
+type MapDestinationSeed = {
+  airport: string
+  city: string
+  latitude: number
+  longitude: number
 }
 
-type FlightDestinationsPayload = {
-  data?: Array<{
-    destination?: string
-    departureDate?: string
-    returnDate?: string
-    price?: { total?: string }
-  }>
+const destinationMapSeeds: Record<string, MapDestinationSeed> = {
+  ATL: { airport: 'ATL', city: 'Atlanta', latitude: 33.6407, longitude: -84.4277 },
+  CDG: { airport: 'CDG', city: 'Paris', latitude: 49.0097, longitude: 2.5479 },
+  DEN: { airport: 'DEN', city: 'Denver', latitude: 39.8561, longitude: -104.6737 },
+  DFW: { airport: 'DFW', city: 'Dallas', latitude: 32.8998, longitude: -97.0403 },
+  HND: { airport: 'HND', city: 'Tokyo', latitude: 35.5494, longitude: 139.7798 },
+  JFK: { airport: 'JFK', city: 'New York', latitude: 40.6413, longitude: -73.7781 },
+  LAX: { airport: 'LAX', city: 'Los Angeles', latitude: 33.9416, longitude: -118.4085 },
+  LHR: { airport: 'LHR', city: 'London', latitude: 51.47, longitude: -0.4543 },
+  MIA: { airport: 'MIA', city: 'Miami', latitude: 25.7959, longitude: -80.287 },
+  ORD: { airport: 'ORD', city: 'Chicago', latitude: 41.9742, longitude: -87.9073 },
+  PPT: { airport: 'PPT', city: 'Papeete', latitude: -17.5537, longitude: -149.6063 },
+  SEA: { airport: 'SEA', city: 'Seattle', latitude: 47.4502, longitude: -122.3088 },
+  STT: { airport: 'STT', city: 'St. Thomas', latitude: 18.3373, longitude: -64.9734 },
+  SYD: { airport: 'SYD', city: 'Sydney', latitude: -33.9399, longitude: 151.1753 },
 }
 
-type LocationPayload = {
-  data?: Array<{
-    iataCode?: string
-    name?: string
-    address?: {
-      cityName?: string
-      countryName?: string
-    }
-    geoCode?: {
-      latitude?: number
-      longitude?: number
-    }
-  }>
+const destinationCandidatesByOrigin: Record<string, string[]> = {
+  ATL: ['MIA', 'JFK', 'DEN', 'LAX'],
+  DFW: ['DEN', 'MIA', 'LAX', 'JFK'],
+  JFK: ['MIA', 'LAX', 'DEN', 'SEA'],
+  LAX: ['SEA', 'DEN', 'JFK', 'MIA'],
+  LHR: ['JFK', 'CDG', 'HND', 'PPT'],
+  ORD: ['DEN', 'MIA', 'SEA', 'LAX'],
+  SEA: ['LAX', 'DEN', 'JFK', 'MIA'],
 }
 
 function addDays(base: string, offset: number) {
@@ -61,12 +60,13 @@ function addDays(base: string, offset: number) {
   return date.toISOString().slice(0, 10)
 }
 
-function average(values: number[]) {
-  return Math.round(values.reduce((sum, value) => sum + value, 0) / Math.max(values.length, 1))
-}
+function median(values: number[]) {
+  if (values.length === 0) {
+    return 0
+  }
 
-function priceValue(value: string | undefined) {
-  return Math.round(Number(value ?? 0))
+  const sorted = [...values].sort((left, right) => left - right)
+  return sorted[Math.floor(sorted.length / 2)]
 }
 
 function projectPoint(latitude: number, longitude: number) {
@@ -78,32 +78,91 @@ function projectPoint(latitude: number, longitude: number) {
   }
 }
 
-function buildCheapestWeekLabel(calendar: Array<{ date: string; price: number }>) {
-  if (calendar.length < 7) {
-    return calendar[0]?.date ?? 'No live date sweep'
+function buildCheapestWeekLabel(calendar: CalendarPoint[]) {
+  if (calendar.length === 0) {
+    return 'No sampled date sweep'
   }
 
-  let bestStart = 0
-  let bestAverage = Number.POSITIVE_INFINITY
-
-  for (let index = 0; index <= calendar.length - 7; index += 1) {
-    const window = calendar.slice(index, index + 7)
-    const windowAverage = average(window.map((day) => day.price))
-    if (windowAverage < bestAverage) {
-      bestAverage = windowAverage
-      bestStart = index
-    }
-  }
-
-  const start = new Date(`${calendar[bestStart].date}T12:00:00`).toLocaleDateString('en-US', {
+  const cheapest = [...calendar].sort((left, right) => left.price - right.price)[0]
+  const label = new Date(`${cheapest.date}T12:00:00`).toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
   })
-  const end = new Date(`${calendar[bestStart + 6].date}T12:00:00`).toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
+  return `${label} sample window`
+}
+
+function calculateStayLength(departureDate: string, returnDate?: string) {
+  if (!returnDate) {
+    return 4
+  }
+
+  return Math.max(
+    1,
+    Math.round(
+      (new Date(`${returnDate}T12:00:00`).getTime() -
+        new Date(`${departureDate}T12:00:00`).getTime()) /
+        (24 * 60 * 60 * 1000),
+    ),
+  )
+}
+
+async function cheapestOfferPrice(options: {
+  origin: string
+  destination: string
+  departureDate: string
+  returnDate?: string
+  tripType: 'round-trip' | 'one-way'
+  travelers: number
+  cabinClass: string
+}) {
+  const payload = await createDuffelOfferRequest({
+    ...options,
+    maxConnections: 1,
+    supplierTimeoutMs: 7500,
   })
-  return `${start} – ${end}`
+
+  const prices = (payload.data?.offers ?? [])
+    .map((offer) => Number(offer.total_amount ?? 0))
+    .filter((price) => Number.isFinite(price) && price > 0)
+    .sort((left, right) => left - right)
+
+  return prices[0] ?? 0
+}
+
+function buildCalendarPayload(calendar: CalendarPoint[]) {
+  if (calendar.length === 0) {
+    return []
+  }
+
+  const min = Math.min(...calendar.map((item) => item.price))
+  const max = Math.max(...calendar.map((item) => item.price))
+
+  return calendar.map((item) => ({
+    date: item.date,
+    price: item.price,
+    valueScore:
+      max === min
+        ? 90
+        : Math.max(65, Math.min(98, Math.round(98 - ((item.price - min) / Math.max(1, max - min)) * 32))),
+  }))
+}
+
+function getDestinationCandidates(origin: string, destination: string) {
+  const preferred = destinationCandidatesByOrigin[origin] ?? ['DEN', 'MIA', 'LAX', 'JFK']
+  return preferred.filter((code) => code !== origin && code !== destination).slice(0, 4)
+}
+
+function buildHistory(prices: number[]) {
+  if (prices.length === 0) {
+    return []
+  }
+
+  const sorted = [...prices].sort((left, right) => left - right)
+  const low = sorted[0]
+  const med = median(sorted)
+  const high = sorted[sorted.length - 1]
+
+  return [low, low, med, med, high, med, low].filter((value) => value > 0)
 }
 
 export default async function handler(req: HandlerRequest, res: HandlerResponse) {
@@ -114,7 +173,7 @@ export default async function handler(req: HandlerRequest, res: HandlerResponse)
     return
   }
 
-  if (!enforceRateLimit(req, res, { scope: 'route-intelligence', limit: 20, windowMs: 60_000 })) {
+  if (!enforceRateLimit(req, res, { scope: 'route-intelligence', limit: 12, windowMs: 60_000 })) {
     return
   }
 
@@ -124,6 +183,8 @@ export default async function handler(req: HandlerRequest, res: HandlerResponse)
     const departureDate = readSingle(req.query?.departureDate)
     const tripType = readSingle(req.query?.tripType, 'round-trip')
     const returnDate = readSingle(req.query?.returnDate)
+    const travelers = Number(readSingle(req.query?.travelers, '1'))
+    const cabinClass = readSingle(req.query?.cabinClass, 'Economy')
 
     validateIataCode(origin, 'Origin')
     validateIataCode(destination, 'Destination')
@@ -131,22 +192,11 @@ export default async function handler(req: HandlerRequest, res: HandlerResponse)
     if (tripType === 'round-trip' && returnDate) {
       validateDate(returnDate, 'Return date')
     }
+    validateTravelerCount(travelers)
     validateTripType(tripType)
 
-    const stayLength =
-      tripType === 'round-trip' && departureDate && returnDate
-        ? Math.max(
-            1,
-            Math.round(
-              (new Date(`${returnDate}T12:00:00`).getTime() -
-                new Date(`${departureDate}T12:00:00`).getTime()) /
-                (24 * 60 * 60 * 1000),
-            ),
-          )
-        : 4
-
-    const dateRangeStart = addDays(departureDate, -3)
-    const dateRangeEnd = addDays(departureDate, 84)
+    const stayLength = calculateStayLength(departureDate, returnDate)
+    const sweepOffsets = [-3, 0, 3, 6, 9, 12, 15, 18, 21, 24, 27]
     const cacheKey = [
       'route-intel',
       origin,
@@ -154,139 +204,103 @@ export default async function handler(req: HandlerRequest, res: HandlerResponse)
       departureDate,
       returnDate,
       tripType,
+      travelers,
+      cabinClass,
     ].join(':')
 
     const responsePayload = await withMemoryCache(cacheKey, 15 * 60 * 1000, async () => {
-      const token = await fetchAmadeusToken()
+      const calendarCandidates = await Promise.all(
+        sweepOffsets.map(async (offset) => {
+          const sampledDeparture = addDays(departureDate, offset)
+          const sampledReturn =
+            tripType === 'round-trip' ? addDays(sampledDeparture, stayLength) : undefined
 
-      const [datesPayload, metricsPayload, destinationsPayload] = await Promise.all([
-        fetchAmadeusJson<FlightDatesPayload>('/v1/shopping/flight-dates', token, {
-          origin,
-          destination,
-          departureDate: `${dateRangeStart},${dateRangeEnd}`,
-          oneWay: tripType === 'one-way',
-          duration: tripType === 'round-trip' ? stayLength : undefined,
-          currencyCode: 'USD',
-        }),
-        fetchAmadeusJson<PriceMetricsPayload>('/v1/analytics/itinerary-price-metrics', token, {
-          originIataCode: origin,
-          destinationIataCode: destination,
-          departureDate,
-          currencyCode: 'USD',
-        }),
-        fetchAmadeusJson<FlightDestinationsPayload>('/v1/shopping/flight-destinations', token, {
-          origin,
-          departureDate: `${departureDate},${addDays(departureDate, 45)}`,
-          oneWay: tripType === 'one-way',
-          duration: tripType === 'round-trip' ? stayLength : undefined,
-          currencyCode: 'USD',
-          maxPrice: 1200,
-        }),
-      ])
+          try {
+            const cheapestPrice = await cheapestOfferPrice({
+              origin,
+              destination,
+              departureDate: sampledDeparture,
+              returnDate: sampledReturn,
+              tripType: tripType as 'round-trip' | 'one-way',
+              travelers,
+              cabinClass,
+            })
 
-      const calendarRaw =
-        datesPayload.data
-          ?.map((item) => ({
-            date: item.departureDate ?? '',
-            price: priceValue(item.price?.total),
-          }))
-          .filter((item) => item.date && item.price > 0)
-          .sort((left, right) => left.date.localeCompare(right.date)) ?? []
-
-      const calendar = (() => {
-        if (calendarRaw.length === 0) {
-          return []
-        }
-
-        const min = Math.min(...calendarRaw.map((item) => item.price))
-        const max = Math.max(...calendarRaw.map((item) => item.price))
-
-        return calendarRaw.map((item) => ({
-          date: item.date,
-          price: item.price,
-          valueScore:
-            max === min ? 90 : Math.max(65, Math.min(98, Math.round(98 - ((item.price - min) / Math.max(1, max - min)) * 32))),
-        }))
-      })()
-
-      const metrics = metricsPayload.data?.[0]?.priceMetrics ?? []
-      const metricMap = new Map(
-        metrics
-          .filter((item) => item.quartileRanking && item.amount)
-          .map((item) => [item.quartileRanking ?? '', priceValue(item.amount)]),
-      )
-
-      const minMetric = metricMap.get('MINIMUM') ?? Math.min(...calendar.map((item) => item.price), 0)
-      const firstMetric = metricMap.get('FIRST') ?? minMetric
-      const medianMetric = metricMap.get('MEDIUM') ?? average(calendar.map((item) => item.price))
-      const thirdMetric = metricMap.get('THIRD') ?? medianMetric
-      const maxMetric = metricMap.get('MAXIMUM') ?? Math.max(...calendar.map((item) => item.price), 0)
-
-      const benchmarkHistory = [
-        minMetric,
-        firstMetric,
-        firstMetric,
-        medianMetric,
-        medianMetric,
-        thirdMetric,
-        thirdMetric,
-        maxMetric,
-      ].filter((value): value is number => typeof value === 'number' && value > 0)
-
-      const destinations = (destinationsPayload.data ?? []).slice(0, 6)
-      const locationPayloads = await Promise.all(
-        destinations.map((item) =>
-          item.destination
-            ? fetchAmadeusJson<LocationPayload>('/v1/reference-data/locations', token, {
-                keyword: item.destination,
-                subType: 'AIRPORT,CITY',
-                'page[limit]': 1,
-                view: 'LIGHT',
-              }).catch(() => ({ data: [] }))
-            : Promise.resolve({ data: [] }),
-        ),
-      )
-
-      const destinationPoints = destinations
-        .map((item, index) => {
-          const location = locationPayloads[index].data?.[0]
-          const latitude = location?.geoCode?.latitude
-          const longitude = location?.geoCode?.longitude
-          const projected =
-            latitude !== undefined && longitude !== undefined
-              ? projectPoint(latitude, longitude)
-              : { x: 18 + index * 12, y: 18 + (index % 3) * 11 }
-
-          return {
-            airport: item.destination ?? '---',
-            city: location?.address?.cityName ?? location?.name ?? item.destination ?? 'Unknown',
-            x: projected.x,
-            y: projected.y,
-            price: priceValue(item.price?.total),
-            valueTag: index === 0 ? 'Cheapest live option' : 'Live provider fare',
-            summary: item.departureDate
-              ? `Live fare sample for ${item.departureDate}${item.returnDate ? ` → ${item.returnDate}` : ''}`
-              : 'Live destination inspiration pricing',
+            return cheapestPrice > 0
+              ? {
+                  date: sampledDeparture,
+                  price: Math.round(cheapestPrice),
+                }
+              : null
+          } catch {
+            return null
           }
-        })
-        .filter((item) => item.price > 0)
+        }),
+      )
+
+      const calendarRaw = calendarCandidates
+        .filter((item): item is CalendarPoint => Boolean(item))
+        .sort((left, right) => left.date.localeCompare(right.date))
+      const calendarPrices = calendarRaw.map((item) => item.price)
+
+      const destinationPoints = (
+        await Promise.all(
+          getDestinationCandidates(origin, destination).map(async (candidate) => {
+            const seed = destinationMapSeeds[candidate]
+            if (!seed) {
+              return null
+            }
+
+            try {
+              const cheapestPrice = await cheapestOfferPrice({
+                origin,
+                destination: candidate,
+                departureDate,
+                returnDate: tripType === 'round-trip' ? addDays(departureDate, stayLength) : undefined,
+                tripType: tripType as 'round-trip' | 'one-way',
+                travelers,
+                cabinClass,
+              })
+
+              if (!cheapestPrice) {
+                return null
+              }
+
+              const projected = projectPoint(seed.latitude, seed.longitude)
+
+              return {
+                airport: seed.airport,
+                city: seed.city,
+                x: projected.x,
+                y: projected.y,
+                price: Math.round(cheapestPrice),
+                valueTag: 'Live sampled fare',
+                summary: `Sampled live fare for ${departureDate}${tripType === 'round-trip' ? ` with ${stayLength}-night stay` : ''}`,
+              }
+            } catch {
+              return null
+            }
+          }),
+        )
+      ).filter((item): item is NonNullable<typeof item> => Boolean(item))
 
       return {
-        calendar,
-        cheapestWeek: calendar.length > 0 ? buildCheapestWeekLabel(calendar) : 'No live cheapest-week data',
-        benchmark: benchmarkHistory.length > 0
-          ? {
-              low: minMetric,
-              median: medianMetric,
-              high: maxMetric,
-              history: benchmarkHistory,
-            }
-          : null,
+        calendar: buildCalendarPayload(calendarRaw),
+        cheapestWeek: buildCheapestWeekLabel(calendarRaw),
+        benchmark:
+          calendarPrices.length > 0
+            ? {
+                low: Math.min(...calendarPrices),
+                median: median(calendarPrices),
+                high: Math.max(...calendarPrices),
+                history: buildHistory(calendarPrices),
+              }
+            : null,
         destinationPoints,
         sources: {
-          calendar: 'Amadeus Flight Dates',
-          benchmark: 'Amadeus Itinerary Price Metrics',
-          destinations: 'Amadeus Flight Destinations',
+          calendar: 'Duffel live sampled date sweep',
+          benchmark: 'Duffel live sampled fare benchmark',
+          destinations: 'Duffel live sampled destination sweep',
         },
       }
     })
@@ -299,12 +313,14 @@ export default async function handler(req: HandlerRequest, res: HandlerResponse)
         departureDate,
         returnDate: tripType === 'round-trip' ? returnDate : undefined,
         tripType,
-        source: 'amadeus.route-intelligence',
+        source: 'duffel.route-intelligence',
         cheapestPrice: responsePayload.benchmark.low,
         medianPrice: responsePayload.benchmark.median,
         sampleSize: responsePayload.calendar.length,
         metadata: {
           cheapestWeek: responsePayload.cheapestWeek,
+          travelers,
+          cabinClass,
         },
       }).catch((error) => {
         logServerEvent('warn', 'fare_snapshot.write_failed', {

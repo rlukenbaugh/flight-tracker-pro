@@ -24,20 +24,15 @@ import {
 } from './data/appConfig'
 import {
   airportSearchSuggestions,
-  destinationExplorerByOrigin,
   findAirportMatches,
-  flightTemplates,
   resolveAirportCode,
-  routeInsights,
 } from './data/mockData'
 import {
   buildDefaultFilters,
   buildRouteRecommendation,
-  createFlightResults,
   filterFlights,
   formatCurrency,
   formatDuration,
-  getRouteKey,
   sortFlights,
 } from './lib/flightUtils'
 import {
@@ -63,7 +58,6 @@ import type {
   AlertPreference,
   AuthState,
   CabinClass,
-  DataMode,
   FilterState,
   FlightResult,
   SavedFlight,
@@ -150,7 +144,7 @@ function App() {
   const [authMessage, setAuthMessage] = useState<string>()
   const [accountSyncStatus, setAccountSyncStatus] = useState<SyncStatus>('local-only')
   const cloudStateReadyRef = useRef(false)
-  const [dataMode, setDataMode] = useState<DataMode>(livePricingEnabled ? 'live' : 'mock')
+  const dataMode = 'live' as const
   const [liveFlights, setLiveFlights] = useState<FlightResult[]>([])
   const [liveStatus, setLiveStatus] = useState(
     livePricingEnabled
@@ -162,8 +156,8 @@ function App() {
   const [liveRouteIntel, setLiveRouteIntel] = useState<LiveRouteIntelligence>()
   const [liveRouteIntelStatus, setLiveRouteIntelStatus] = useState(
     livePricingEnabled
-      ? 'Live route intelligence is loading from provider benchmark and inspiration endpoints.'
-      : 'Route intelligence is using the curated mock layer.',
+      ? 'Live route intelligence is loading from sampled provider searches.'
+      : 'Route intelligence is unavailable until the live provider is configured.',
   )
   const [liveAirportLookup, setLiveAirportLookup] = useState<{
     query: string
@@ -175,17 +169,8 @@ function App() {
   const [activeAirportField, setActiveAirportField] = useState<'origin' | 'destination'>('origin')
   const [isPending, startTransition] = useTransition()
 
-  const activeRouteKey = getRouteKey(search.origin, search.destination)
-  const mockRouteInsight = routeInsights[activeRouteKey]
-  const routeInsight = dataMode === 'live' ? liveRouteIntel?.insight : mockRouteInsight
-  const activeTemplates = flightTemplates.filter(
-    (flight) => flight.origin === search.origin && flight.destination === search.destination,
-  )
-  const routeResults =
-    activeTemplates.length > 0
-      ? createFlightResults(activeTemplates, search, routeInsight, filters.flexDays)
-      : []
-  const availableResults = dataMode === 'live' ? liveFlights : routeResults
+  const routeInsight = liveRouteIntel?.insight
+  const availableResults = liveFlights
   const priceCap = Math.max(
     600,
     ...availableResults.map((flight) => flight.pricePerTraveler),
@@ -197,28 +182,19 @@ function App() {
   const selectedFlight =
     deferredResults.find((flight) => flight.id === selectedFlightId) ?? deferredResults[0]
   const bestFlight = rankedResults[0]
-  const explorerDestinations =
-    dataMode === 'live'
-      ? liveRouteIntel?.destinationPoints ?? []
-      : destinationExplorerByOrigin[search.origin] ?? []
-  const fallbackAirlineTemplates =
-    activeTemplates.length > 0
-      ? activeTemplates
-      : flightTemplates.filter((flight) => flight.origin === search.origin)
+  const explorerDestinations = liveRouteIntel?.destinationPoints ?? []
   const airlineOptions = Array.from(
-    new Set(fallbackAirlineTemplates.map((flight) => flight.airline)),
+    new Set(availableResults.map((flight) => flight.airline)),
   ).sort()
   const airportSuggestions =
-    dataMode === 'live' && deferredAirportQuery.trim().length > 1
+    deferredAirportQuery.trim().length > 1
       ? liveAirportLookup.query === deferredAirportQuery.trim()
         ? liveAirportLookup.suggestions
-        : []
-      : deferredAirportQuery.trim().length > 0
-        ? findAirportMatches(deferredAirportQuery, 10).map((airport) =>
+        : findAirportMatches(deferredAirportQuery, 10).map((airport) =>
             [airport.city, airport.state].filter(Boolean).join(', ') +
             ` (${airport.code}) - ${airport.airport}`,
           )
-        : airportSearchSuggestions.slice(0, 40)
+      : airportSearchSuggestions.slice(0, 40)
   const savedFlightsWithLivePrices = savedFlights.map((saved) => {
     const live = availableResults.find(
       (flight) =>
@@ -361,7 +337,7 @@ function App() {
   useEffect(() => {
     let cancelled = false
 
-    if (dataMode !== 'live' || !livePricingEnabled) {
+    if (!livePricingEnabled) {
       return
     }
 
@@ -392,8 +368,8 @@ function App() {
           })
           setLiveStatus(
             error instanceof Error
-              ? `${error.message}. No mock fare fallback is being used.`
-              : 'Live provider request failed. No mock fare fallback is being used.',
+              ? `${error.message}. No fare fallback is being used.`
+              : 'Live provider request failed. No fare fallback is being used.',
           )
         }
       })
@@ -401,12 +377,12 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [dataMode, filters.flexDays, livePricingEnabled, search])
+  }, [filters.flexDays, livePricingEnabled, search])
 
   useEffect(() => {
     let cancelled = false
 
-    if (dataMode !== 'live' || !livePricingEnabled) {
+    if (!livePricingEnabled) {
       return
     }
 
@@ -424,7 +400,7 @@ function App() {
           })
           setLiveRouteIntelStatus(
             payload.calendar?.length || payload.destinationPoints.length || payload.insight
-              ? 'Live route intelligence loaded from provider benchmark, date, and destination endpoints.'
+              ? 'Live route intelligence loaded from sampled provider date and destination searches.'
               : 'Live route intelligence is unavailable for this search.',
           )
         }
@@ -446,14 +422,14 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [dataMode, livePricingEnabled, search])
+  }, [livePricingEnabled, search])
 
   useEffect(() => {
     let cancelled = false
 
     const query = deferredAirportQuery.trim()
 
-    if (dataMode !== 'live' || !livePricingEnabled || query.length < 2) {
+    if (!livePricingEnabled || query.length < 2) {
       return
     }
 
@@ -481,7 +457,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [dataMode, deferredAirportQuery, livePricingEnabled])
+  }, [deferredAirportQuery, livePricingEnabled])
 
   useEffect(() => {
     let cancelled = false
@@ -706,41 +682,27 @@ function App() {
   }
 
   const recommendation =
-    dataMode === 'live'
-      ? routeInsight && bestFlight
-        ? buildRouteRecommendation(routeInsight, bestFlight)
-        : bestFlight
-          ? 'Live pricing is active. Compare this fare against the live benchmark panels, but treat bookability and timing as the final decision drivers.'
-          : 'No live offers were returned for this route, so there is no pricing recommendation to rank yet.'
-      : buildRouteRecommendation(routeInsight, bestFlight)
+    routeInsight && bestFlight
+      ? buildRouteRecommendation(routeInsight, bestFlight)
+      : bestFlight
+        ? 'Live pricing is active. Compare this fare against the live benchmark panels, but treat bookability and timing as the final decision drivers.'
+        : 'No live offers were returned for this route, so there is no pricing recommendation to rank yet.'
   const bestLiveFare = bestFlight ? formatCurrency(bestFlight.pricePerTraveler) : '—'
-  const displayedLiveStatus =
-    dataMode !== 'live' || !livePricingEnabled
-      ? 'Using curated mock inventory.'
-      : liveStatus
+  const displayedLiveStatus = livePricingEnabled
+    ? liveStatus
+    : 'Live provider is not configured.'
   const resultsSummary =
     deferredResults.length > 0
       ? `${deferredResults.length} flights ranked for ${search.origin} to ${search.destination}`
-      : dataMode === 'live'
-        ? `No live flights found for ${search.origin} to ${search.destination}`
-        : 'No flights match the current filter stack'
+      : `No live flights found for ${search.origin} to ${search.destination}`
   const selectedSaved = selectedFlight
     ? savedFlightsWithLivePrices.some((item) => item.id === selectedFlight.id)
     : false
-  const heatmapCalendar = dataMode === 'live' ? liveRouteIntel?.calendar ?? [] : routeInsight?.calendar ?? []
-  const heatmapWeek = dataMode === 'live' ? liveRouteIntel?.cheapestWeek ?? 'No live cheapest-week data' : routeInsight?.cheapestWeek ?? ''
-  const trendSourceLabel =
-    dataMode === 'live'
-      ? liveRouteIntel?.sources.benchmark ?? 'Live provider benchmark'
-      : 'Simulated market trend model'
-  const heatmapSourceLabel =
-    dataMode === 'live'
-      ? liveRouteIntel?.sources.calendar ?? 'Live provider date pricing'
-      : 'Simulated flexible-date pricing'
-  const mapSourceLabel =
-    dataMode === 'live'
-      ? liveRouteIntel?.sources.destinations ?? 'Live provider inspiration fares'
-      : 'Simulated destination map pricing'
+  const heatmapCalendar = liveRouteIntel?.calendar ?? []
+  const heatmapWeek = liveRouteIntel?.cheapestWeek ?? 'No live cheapest-week data'
+  const trendSourceLabel = liveRouteIntel?.sources.benchmark ?? 'Live provider benchmark'
+  const heatmapSourceLabel = liveRouteIntel?.sources.calendar ?? 'Live provider date pricing'
+  const mapSourceLabel = liveRouteIntel?.sources.destinations ?? 'Live provider inspiration fares'
 
   return (
     <div className="app-shell">
@@ -754,9 +716,7 @@ function App() {
           </div>
           <div className="status-cluster">
             <span className="status-pill">Premium dashboard</span>
-            <span className="status-pill subtle">
-              {dataMode === 'live' ? 'Live-capable mode' : 'Mock-safe mode'}
-            </span>
+            <span className="status-pill subtle">Live pricing only</span>
           </div>
         </div>
 
@@ -786,15 +746,13 @@ function App() {
             </div>
 
             <div className="hero-caption">
-              <span>{dataMode === 'live' ? 'Live API mode' : 'Mock mode'}</span>
+              <span>Live API mode</span>
               <span>{displayedLiveStatus}</span>
             </div>
-            {dataMode === 'live' ? (
-              <div className="hero-caption">
-                <span>Live route intelligence</span>
-                <span>{liveRouteIntelStatus}</span>
-              </div>
-            ) : null}
+            <div className="hero-caption">
+              <span>Live route intelligence</span>
+              <span>{liveRouteIntelStatus}</span>
+            </div>
           </div>
 
           <form className="search-panel" onSubmit={handleSearchSubmit}>
@@ -908,7 +866,7 @@ function App() {
               <p>
                 {livePricingEnabled
                   ? 'Live pricing mode is active. No simulated fare fallback will be shown if the provider returns no offers.'
-                  : 'Searches use curated mock fares until the live provider env vars are configured.'}
+                  : 'Live pricing is not configured yet, so no fare inventory will be shown.'}
               </p>
               <button type="submit" className="primary-button" data-testid="search-submit">
                 {isPending ? 'Refreshing route...' : 'Search flights'}
@@ -1179,8 +1137,8 @@ function App() {
               sourceLabel={trendSourceLabel}
               note={
                 dataMode === 'live'
-                  ? 'This card uses live provider benchmark metrics. It is not a guaranteed forward price forecast.'
-                  : 'This card is still simulated in mock mode.'
+                  ? 'This card uses sampled live provider fares. It is a directional benchmark, not a guaranteed forward forecast.'
+                  : 'This card is unavailable until live pricing is configured.'
               }
               emptyMessage={
                 dataMode === 'live'
@@ -1196,27 +1154,24 @@ function App() {
               recommendationSource={
                 dataMode === 'live'
                   ? routeInsight
-                    ? 'Live offer plus provider benchmark'
+                    ? 'Live offer plus sampled provider benchmark'
                     : 'Live offer only'
                   : 'Simulated recommendation model'
               }
               supportNote={
                 dataMode === 'live'
-                  ? 'Buy/wait guidance is benchmarked from live provider data where available. It is advisory, not a booking guarantee.'
-                  : 'This recommendation is simulated in mock mode.'
+                  ? 'Buy/wait guidance is benchmarked from sampled live provider data where available. It is advisory, not a booking guarantee.'
+                  : 'This recommendation becomes available when live pricing is configured.'
               }
             />
           </div>
 
           <div className="support-grid">
             <DataModePanel
-              dataMode={dataMode}
               liveEnabled={livePricingEnabled}
               authState={authState}
               liveStatus={displayedLiveStatus}
               weatherStatus={weatherStatus}
-              onChangeMode={setDataMode}
-              liveOnly={livePricingEnabled}
             />
             <AuthPanel
               authState={authState}
@@ -1239,11 +1194,7 @@ function App() {
               cheapestWeek={heatmapWeek}
               onSelectDate={applyHeatmapDate}
               sourceLabel={heatmapSourceLabel}
-              emptyMessage={
-                dataMode === 'live'
-                  ? 'Live cheapest-date pricing is not available from the provider for this search yet.'
-                  : 'Select a supported route to unlock flexible-date pricing.'
-              }
+              emptyMessage="Sampled live cheapest-date pricing is not available for this search yet."
             />
           ) : null}
 
@@ -1253,11 +1204,7 @@ function App() {
             destinations={explorerDestinations}
             onSelectDestination={applyDestination}
             sourceLabel={mapSourceLabel}
-            emptyMessage={
-              dataMode === 'live'
-                ? `Live destination inspiration pricing is not available from ${search.origin} yet.`
-                : `Select an origin with a simulated destination map to explore.`
-            }
+            emptyMessage={`Sampled live destination pricing is not available from ${search.origin} yet.`}
           />
 
           <SavedFlightsPanel flights={savedFlightsWithLivePrices} syncStatus={accountSyncStatus} />

@@ -1,4 +1,4 @@
-import { fetchAmadeusJson, fetchAmadeusToken } from './_amadeus.js'
+import { fetchDuffelJson, type DuffelPlaceSuggestion } from './_duffel.js'
 import {
   enforceRateLimit,
   json,
@@ -12,17 +12,7 @@ import {
 } from './_http.js'
 
 type AirportSearchPayload = {
-  data?: Array<{
-    subType?: string
-    iataCode?: string
-    name?: string
-    address?: {
-      cityName?: string
-      stateCode?: string
-      countryName?: string
-      countryCode?: string
-    }
-  }>
+  data?: DuffelPlaceSuggestion[]
 }
 
 export default async function handler(req: HandlerRequest, res: HandlerResponse) {
@@ -54,18 +44,15 @@ export default async function handler(req: HandlerRequest, res: HandlerResponse)
       `airport-search:${keyword.toLowerCase()}:${Math.max(1, Math.min(max, 10))}`,
       30 * 60 * 1000,
       async () => {
-        const token = await fetchAmadeusToken()
-        return fetchAmadeusJson<AirportSearchPayload>(
-          '/v1/reference-data/locations',
-          token,
-          {
-            keyword,
-            subType: 'AIRPORT,CITY',
-            'page[limit]': Math.max(1, Math.min(max, 10)),
-            view: 'LIGHT',
-            sort: 'analytics.travelers.score',
+        const response = await fetchDuffelJson<AirportSearchPayload>('/places/suggestions', {
+          params: {
+            query: keyword,
           },
-        )
+        })
+
+        return {
+          data: (response.data ?? []).slice(0, Math.max(1, Math.min(max, 10))),
+        }
       },
     )
 

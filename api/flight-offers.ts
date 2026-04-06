@@ -1,5 +1,5 @@
 import { recordFareSnapshot } from './_database.js'
-import { fetchAmadeusJson, fetchAmadeusToken } from './_amadeus.js'
+import { createDuffelOfferRequest } from './_duffel.js'
 import {
   enforceRateLimit,
   json,
@@ -61,22 +61,22 @@ export default async function handler(req: HandlerRequest, res: HandlerResponse)
       cabinClass,
     ].join(':')
 
-    const payload = await withMemoryCache(cacheKey, 5 * 60 * 1000, async () => {
-      const token = await fetchAmadeusToken()
-      return fetchAmadeusJson('/v2/shopping/flight-offers', token, {
-        originLocationCode: origin,
-        destinationLocationCode: destination,
+    const payload = await withMemoryCache(cacheKey, 5 * 60 * 1000, async () =>
+      createDuffelOfferRequest({
+        origin,
+        destination,
         departureDate,
-        adults: String(travelers),
-        travelClass: cabinClass.replace(' ', '_'),
-        currencyCode: 'USD',
-        max: '12',
         returnDate: tripType === 'round-trip' && returnDate ? returnDate : undefined,
-      })
-    })
+        tripType: tripType as 'round-trip' | 'one-way',
+        travelers,
+        cabinClass,
+        maxConnections: 1,
+        supplierTimeoutMs: 12000,
+      }),
+    )
 
-    const offers = ((payload as { data?: Array<{ price?: { grandTotal?: string } }> }).data ?? [])
-      .map((offer) => Number(offer.price?.grandTotal ?? 0))
+    const offers = (payload.data?.offers ?? [])
+      .map((offer) => Number(offer.total_amount ?? 0))
       .filter((price) => Number.isFinite(price) && price > 0)
       .sort((left, right) => left - right)
 
@@ -89,7 +89,7 @@ export default async function handler(req: HandlerRequest, res: HandlerResponse)
         departureDate,
         returnDate: tripType === 'round-trip' ? returnDate : undefined,
         tripType,
-        source: 'amadeus.flight-offers',
+        source: 'duffel.flight-offers',
         cheapestPrice: Math.round(offers[0]),
         medianPrice: Math.round(offers[midIndex]),
         sampleSize: offers.length,
@@ -112,7 +112,12 @@ export default async function handler(req: HandlerRequest, res: HandlerResponse)
       resultCount: offers.length,
     })
 
-    json(res, 200, payload)
+    json(res, 200, {
+      data: payload.data?.offers ?? [],
+      requestId: payload.data?.id,
+      liveMode: payload.data?.live_mode ?? true,
+      source: 'Duffel Offer Requests',
+    })
   } catch (error) {
     logServerEvent('error', 'flight_offers.failure', {
       message: error instanceof Error ? error.message : 'Unexpected live flight failure.',

@@ -1,7 +1,6 @@
 import type {
   AirportOption,
   CalendarPrice,
-  CabinClass,
   DestinationPoint,
   FlightResult,
   RouteInsight,
@@ -12,24 +11,14 @@ import { destinationCoordinates } from '../data/appConfig'
 import { buildApiUrl } from './runtimeConfig'
 
 interface LiveFlightApiResponse {
-  data?: AmadeusFlightOffer[]
-  dictionaries?: {
-    carriers?: Record<string, string>
-  }
+  data?: DuffelOffer[]
+  requestId?: string
+  liveMode?: boolean
+  source?: string
 }
 
 interface LiveAirportSearchResponse {
-  data?: Array<{
-    subType?: string
-    iataCode?: string
-    name?: string
-    address?: {
-      cityName?: string
-      stateCode?: string
-      countryName?: string
-      countryCode?: string
-    }
-  }>
+  data?: DuffelPlaceSuggestion[]
 }
 
 interface LiveRouteIntelligenceResponse {
@@ -61,30 +50,54 @@ export interface LiveRouteIntelligence {
   }
 }
 
-interface AmadeusFlightOffer {
+interface DuffelPlaceSuggestion {
+  type?: 'airport' | 'city'
+  iata_code?: string
+  iata_city_code?: string
+  iata_country_code?: string
+  city_name?: string
+  name?: string
+  airports?: Array<{
+    iata_code?: string
+    name?: string
+    city_name?: string
+  }>
+}
+
+interface DuffelOffer {
   id: string
-  itineraries: Array<{
-    duration?: string
-    segments: Array<{
-      carrierCode: string
-      number: string
-      departure: { iataCode: string; at: string }
-      arrival: { iataCode: string; at: string }
-      aircraft?: { code?: string }
-    }>
-  }>
-  price: {
-    grandTotal: string
+  total_amount?: string
+  total_currency?: string
+  owner?: {
+    name?: string
+    iata_code?: string
   }
-  travelerPricings?: Array<{
-    fareOption?: string
-    fareDetailsBySegment?: Array<{
-      cabin?: CabinClass | string
-      includedCheckedBags?: { quantity?: number }
+  conditions?: {
+    refund_before_departure?: {
+      allowed?: boolean
+    }
+  }
+  slices?: Array<{
+    duration?: string
+    fare_brand_name?: string
+    segments?: Array<{
+      departing_at?: string
+      arriving_at?: string
+      origin_terminal?: string
+      destination_terminal?: string
+      origin?: { iata_code?: string; city_name?: string; name?: string }
+      destination?: { iata_code?: string; city_name?: string; name?: string }
+      marketing_carrier?: { name?: string; iata_code?: string }
+      operating_carrier?: { name?: string; iata_code?: string }
+      aircraft?: { iata_code?: string; name?: string }
+      passengers?: Array<{
+        baggages?: Array<{
+          type?: string
+          quantity?: number
+        }>
+      }>
     }>
   }>
-  validatingAirlineCodes?: string[]
-  numberOfBookableSeats?: number
 }
 
 function parseTime(value: string) {
@@ -103,17 +116,6 @@ function parseDuration(duration: string | undefined) {
   const hours = Number(duration.match(/(\d+)H/)?.[1] ?? 0)
   const minutes = Number(duration.match(/(\d+)M/)?.[1] ?? 0)
   return hours * 60 + minutes
-}
-
-function carrierName(
-  dictionaries: LiveFlightApiResponse['dictionaries'],
-  code: string | undefined,
-) {
-  if (!code) {
-    return 'Partner airline'
-  }
-
-  return dictionaries?.carriers?.[code] ?? code
 }
 
 function inferAirlineQuality(airline: string) {
@@ -136,6 +138,45 @@ function normalizeInverse(value: number, min: number, max: number) {
   return 100 - ((value - min) / (max - min)) * 100
 }
 
+function diffMinutes(start: string | undefined, end: string | undefined) {
+  if (!start || !end) {
+    return 0
+  }
+
+  return Math.max(0, Math.round((new Date(end).getTime() - new Date(start).getTime()) / 60000))
+}
+
+function parseDuffelDuration(
+  value: string | undefined,
+  segments: NonNullable<DuffelOffer['slices']>[number]['segments'] = [],
+) {
+  const direct = parseDuration(value)
+  if (direct > 0) {
+    return direct
+  }
+
+  const first = segments?.[0]?.departing_at
+  const last = segments?.[segments.length - 1]?.arriving_at
+  return diffMinutes(first, last)
+}
+
+function collectBaggageIncluded(
+  segments: NonNullable<DuffelOffer['slices']>[number]['segments'] = [],
+  allowedTypes: string[],
+) {
+  const normalizedTypes = allowedTypes.map((type) => type.toLowerCase())
+
+  return segments.some((segment) =>
+    (segment.passengers ?? []).some((passenger) =>
+      (passenger.baggages ?? []).some(
+        (baggage) =>
+          normalizedTypes.includes((baggage.type ?? '').toLowerCase()) &&
+          (baggage.quantity ?? 0) > 0,
+      ),
+    ),
+  )
+}
+
 function buildLiveBenchmarkInsight(
   search: SearchState,
   benchmark: NonNullable<LiveRouteIntelligenceResponse['benchmark']>,
@@ -146,8 +187,8 @@ function buildLiveBenchmarkInsight(
   const weeklyChangePercent = 0
   const summary =
     recentAverage > 0
-      ? `Live benchmark pricing from the provider shows a median fare near $${recentAverage}, with lows around $${benchmark.low} and upper-range fares near $${benchmark.high}.`
-      : 'Live benchmark pricing is available for this route.'
+      ? `Sampled live pricing shows a median fare near $${recentAverage}, with lows around $${benchmark.low} and upper-range fares near $${benchmark.high}.`
+      : 'Sampled live pricing is available for this route.'
 
   return {
     routeKey: `${search.origin}-${search.destination}`,
@@ -159,10 +200,10 @@ function buildLiveBenchmarkInsight(
     recentAverage,
     summary,
     buyRecommendation:
-      'Use the benchmark as a reference point. Final bookable pricing still depends on the specific live flight offer you choose.',
+      'Use this sampled live benchmark as a reference point. Final bookable pricing still depends on the specific live flight offer you choose.',
     historicalTip:
-      'This trend card is based on live provider price metrics, not the older simulated history model.',
-    cheapestWeek: 'Live date sweep active',
+      'This trend card is based on sampled live searches, not the older simulated history model.',
+    cheapestWeek: 'Sampled live date sweep active',
     weatherSummary: 'Destination weather comes from Open-Meteo.',
     timezoneDifference: 'Live time-zone intelligence not connected yet.',
     history: benchmark.history,
@@ -195,19 +236,47 @@ export async function searchLiveFlights(
   const offers = payload.data ?? []
 
   const mapped = offers.map((offer) => {
-    const firstItinerary = offer.itineraries[0]
-    const segments = firstItinerary?.segments ?? []
+    const firstSlice = offer.slices?.[0]
+    const segments = firstSlice?.segments ?? []
     const firstSegment = segments[0]
     const lastSegment = segments[segments.length - 1]
-    const airlineCode = offer.validatingAirlineCodes?.[0] ?? firstSegment?.carrierCode
-    const airline = carrierName(payload.dictionaries, airlineCode)
-    const checkedBagQuantity =
-      offer.travelerPricings?.[0]?.fareDetailsBySegment?.[0]?.includedCheckedBags?.quantity ?? 0
-    const fareOption = offer.travelerPricings?.[0]?.fareOption ?? 'STANDARD'
-    const totalPrice = Math.round(Number(offer.price.grandTotal))
-    const delayRisk: FlightResult['delayRisk'] = segments.length > 1 ? 'Moderate' : 'Low'
+    const airline =
+      firstSegment?.operating_carrier?.name ??
+      firstSegment?.marketing_carrier?.name ??
+      offer.owner?.name ??
+      'Partner airline'
+    const airlineCode =
+      firstSegment?.operating_carrier?.iata_code ??
+      firstSegment?.marketing_carrier?.iata_code ??
+      offer.owner?.iata_code
+    const checkedBagIncluded = collectBaggageIncluded(segments, ['checked'])
+    const carryOnIncluded = collectBaggageIncluded(segments, ['carry_on', 'carry-on', 'cabin'])
+    const totalPrice = Math.round(Number(offer.total_amount ?? 0))
+    const layoverMinutes = segments.slice(0, -1).map((segment, index) =>
+      diffMinutes(segment.arriving_at, segments[index + 1]?.departing_at),
+    )
+    const tightConnection = layoverMinutes.some((minutes) => minutes > 0 && minutes < 50)
+    const overnightLayover = layoverMinutes.some((minutes) => minutes >= 480)
+    const warnings = []
+
+    if (tightConnection) {
+      warnings.push('This itinerary has a tight connection under 50 minutes.')
+    }
+    if (overnightLayover) {
+      warnings.push('This itinerary includes a long overnight layover.')
+    }
+
     const fareProfile: FlightResult['fareProfile'] =
-      fareOption === 'STANDARD' ? 'Standard' : fareOption === 'INCLUSIVE' ? 'Flex' : 'Saver'
+      firstSlice?.fare_brand_name?.toLowerCase().includes('basic')
+        ? 'Saver'
+        : offer.conditions?.refund_before_departure?.allowed
+          ? 'Flex'
+          : 'Standard'
+    const delayRisk: FlightResult['delayRisk'] = tightConnection
+      ? 'Elevated'
+      : segments.length > 1
+        ? 'Moderate'
+        : 'Low'
 
     return {
       id: `live-${offer.id}-${search.cabinClass}`,
@@ -215,29 +284,37 @@ export async function searchLiveFlights(
       origin: search.origin,
       destination: search.destination,
       airline,
-      flightNumber: `${airlineCode ?? '--'} ${firstSegment?.number ?? offer.id}`,
-      departureTime: firstSegment ? parseTime(firstSegment.departure.at) : '--:--',
-      arrivalTime: lastSegment ? parseTime(lastSegment.arrival.at) : '--:--',
-      totalMinutes: parseDuration(firstItinerary?.duration),
+      flightNumber: `${airlineCode ?? '--'} ${offer.id.slice(-6).toUpperCase()}`,
+      departureTime: firstSegment?.departing_at ? parseTime(firstSegment.departing_at) : '--:--',
+      arrivalTime: lastSegment?.arriving_at ? parseTime(lastSegment.arriving_at) : '--:--',
+      totalMinutes: parseDuffelDuration(firstSlice?.duration, segments),
       stops: Math.max(0, segments.length - 1),
-      layovers: segments.slice(0, -1).map((segment) => segment.arrival.iataCode),
-      layoverMinutes: segments.slice(0, -1).map(() => 90),
+      layovers: segments.slice(0, -1).map((segment) => segment.destination?.iata_code ?? '---'),
+      layoverMinutes,
       cabinClass: search.cabinClass,
       totalPrice,
       pricePerTraveler: Math.round(totalPrice / search.travelers),
-      refundable: fareOption !== 'STANDARD',
-      carryOnIncluded: true,
-      checkedBagIncluded: checkedBagQuantity > 0,
+      refundable: Boolean(offer.conditions?.refund_before_departure?.allowed),
+      carryOnIncluded,
+      checkedBagIncluded,
       airlineQuality: inferAirlineQuality(airline),
       delayRisk,
-      aircraft: firstSegment?.aircraft?.code ?? 'Unknown aircraft',
-      regionalAircraft: false,
-      terminalNote: 'Live provider data connected. Terminal changes depend on airline feeds.',
-      estimatedBagFees: checkedBagQuantity > 0 ? 0 : 35 * search.travelers,
+      aircraft: firstSegment?.aircraft?.name ?? firstSegment?.aircraft?.iata_code ?? 'Unknown aircraft',
+      regionalAircraft: ['E75', 'CRJ', 'CR9', 'AT7', 'DH4'].some((code) =>
+        (firstSegment?.aircraft?.iata_code ?? '').toUpperCase().includes(code),
+      ),
+      terminalNote:
+        firstSegment?.origin_terminal || lastSegment?.destination_terminal
+          ? `Terminals: depart ${firstSegment?.origin_terminal ?? 'TBD'}${lastSegment?.destination_terminal ? `, arrive ${lastSegment.destination_terminal}` : ''}.`
+          : 'Live provider data connected. Terminal changes depend on airline feeds.',
+      estimatedBagFees: checkedBagIncluded ? 0 : 35 * search.travelers,
       estimatedExtras: 28 * search.travelers,
-      totalEstimatedTripCost: totalPrice + (checkedBagQuantity > 0 ? 0 : 35 * search.travelers) + 28 * search.travelers,
-      warnings: segments.length > 1 ? ['Connection quality depends on airline schedule resilience.'] : [],
-      seatInsight: 'Live fare loaded. Seat specifics require seat-map partner data.',
+      totalEstimatedTripCost:
+        totalPrice + (checkedBagIncluded ? 0 : 35 * search.travelers) + 28 * search.travelers,
+      warnings,
+      seatInsight: carryOnIncluded
+        ? 'Live fare loaded. Seat specifics still require seat-map partner data.'
+        : 'Carry-on allowance was not explicit in the live fare data. Confirm baggage rules before booking.',
       fareProfile,
       score: 0,
       dealLabel: '🟡 Fair',
@@ -286,16 +363,23 @@ export async function searchLiveAirports(query: string): Promise<AirportOption[]
   const payload = (await response.json()) as LiveAirportSearchResponse
 
   return (payload.data ?? [])
-    .filter((item) => item.iataCode && item.address?.cityName)
+    .filter((item) => item.iata_code && (item.city_name || item.name))
     .map((item) => ({
-      code: item.iataCode ?? '',
-      city: item.address?.cityName ?? item.name ?? 'Unknown city',
-      airport: item.name ?? item.address?.cityName ?? 'Unknown airport',
-      country: item.address?.countryName ?? item.address?.countryCode ?? 'Unknown country',
-      state: item.address?.stateCode,
-      metro: item.address?.cityName,
-      priority: item.subType === 'CITY' ? 95 : 85,
-      aliases: item.subType === 'CITY' ? ['City code'] : undefined,
+      code: item.iata_code ?? '',
+      city: item.city_name ?? item.name ?? 'Unknown city',
+      airport:
+        item.type === 'city'
+          ? `${item.name ?? item.city_name ?? 'Unknown city'} metro area`
+          : item.name ?? item.city_name ?? 'Unknown airport',
+      country: item.iata_country_code ?? 'Unknown country',
+      metro: item.city_name ?? item.iata_city_code,
+      priority: item.type === 'city' ? 95 : 85,
+      aliases:
+        item.type === 'city'
+          ? (item.airports ?? [])
+              .map((airport) => airport.iata_code ?? '')
+              .filter(Boolean)
+          : undefined,
     }))
 }
 
@@ -308,6 +392,8 @@ export async function fetchLiveRouteIntelligence(
     departureDate: search.departureDate,
     returnDate: search.returnDate,
     tripType: search.tripType,
+    travelers: String(search.travelers),
+    cabinClass: search.cabinClass,
   })
 
   const response = await fetch(buildApiUrl(`/api/route-intelligence?${params.toString()}`))

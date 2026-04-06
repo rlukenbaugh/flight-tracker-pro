@@ -1,7 +1,7 @@
 {
   "name": "flight-tracker-pro",
   "private": true,
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Premium flight intelligence desktop app for Windows.",
   "author": "rlukenbaugh",
   "homepage": "https://github.com/rlukenbaugh/flight-tracker-pro",
