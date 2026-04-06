@@ -12,7 +12,7 @@ export const apiBaseUrl =
   import.meta.env.VITE_API_BASE_URL?.replace(/\/+$/, '') ||
   (isPackagedDesktop() ? DEFAULT_HOSTED_API_BASE_URL : '')
 
-export const livePricingAvailable = import.meta.env.VITE_ENABLE_LIVE_FLIGHTS === 'true'
+export const livePricingAvailable = import.meta.env.VITE_ENABLE_LIVE_FLIGHTS?.trim() === 'true'
 
 export function buildApiUrl(path: string) {
   if (!apiBaseUrl) {

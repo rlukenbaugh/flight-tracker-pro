@@ -112,7 +112,7 @@ export function buildDuffelUrl(path: string, params?: Record<string, DuffelQuery
 }
 
 function getDuffelHeaders() {
-  const token = process.env.DUFFEL_API_TOKEN
+  const token = process.env.DUFFEL_API_TOKEN?.trim()
 
   if (!token) {
     throw new Error('DUFFEL_API_TOKEN is required for live flights.')
