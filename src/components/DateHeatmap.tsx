@@ -7,6 +7,8 @@ interface DateHeatmapProps {
   selectedDate: string
   cheapestWeek: string
   onSelectDate: (date: string) => void
+  sourceLabel?: string
+  emptyMessage?: string
 }
 
 function labelDate(value: string) {
@@ -21,7 +23,17 @@ export function DateHeatmap({
   selectedDate,
   cheapestWeek,
   onSelectDate,
+  sourceLabel,
+  emptyMessage,
 }: DateHeatmapProps) {
+  if (calendar.length === 0) {
+    return (
+      <section className="panel heatmap-panel empty-panel">
+        <p>{emptyMessage ?? 'Live cheapest-date pricing is not available for this search yet.'}</p>
+      </section>
+    )
+  }
+
   const min = Math.min(...calendar.map((day) => day.price))
   const max = Math.max(...calendar.map((day) => day.price))
 
@@ -32,7 +44,10 @@ export function DateHeatmap({
           <span className="eyebrow">Flexible Date Price Map</span>
           <h2>Spot the lowest and smartest days up to 12 weeks out</h2>
         </div>
-        <p className="section-aside">Cheapest week: {cheapestWeek}</p>
+        <div>
+          <p className="section-aside">Cheapest week: {cheapestWeek}</p>
+          {sourceLabel ? <p className="section-aside">{sourceLabel}</p> : null}
+        </div>
       </div>
 
       <div className="heatmap-legend">
@@ -63,7 +78,7 @@ export function DateHeatmap({
             >
               <span>{labelDate(day.date)}</span>
               <strong>{formatCurrency(day.price)}</strong>
-              <small>{isBestValue ? 'Best value' : 'Live low'}</small>
+              <small>{isBestValue ? 'Best live value' : 'Live fare sample'}</small>
             </button>
           )
         })}

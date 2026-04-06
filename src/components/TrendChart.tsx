@@ -4,13 +4,16 @@ import { formatCurrency } from '../lib/flightUtils'
 interface TrendChartProps {
   insight?: RouteInsight
   bestFare?: number
+  sourceLabel?: string
+  note?: string
+  emptyMessage?: string
 }
 
-export function TrendChart({ insight, bestFare }: TrendChartProps) {
+export function TrendChart({ insight, bestFare, sourceLabel, note, emptyMessage }: TrendChartProps) {
   if (!insight) {
     return (
       <section className="panel trend-panel empty-panel">
-        <p>Select a supported route to unlock fare history and trend intelligence.</p>
+        <p>{emptyMessage ?? 'Select a supported route to unlock fare history and trend intelligence.'}</p>
       </section>
     )
   }
@@ -32,7 +35,10 @@ export function TrendChart({ insight, bestFare }: TrendChartProps) {
           <span className="eyebrow">Price Trend Intelligence</span>
           <h2>Know whether this fare is moving in your favor</h2>
         </div>
-        <div className={`trend-pill trend-${insight.direction}`}>{insight.direction}</div>
+        <div>
+          <div className={`trend-pill trend-${insight.direction}`}>{insight.direction}</div>
+          {sourceLabel ? <p className="section-aside">{sourceLabel}</p> : null}
+        </div>
       </div>
 
       <div className="trend-stats">
@@ -70,6 +76,7 @@ export function TrendChart({ insight, bestFare }: TrendChartProps) {
 
       <div className="trend-copy">
         <p>{insight.summary}</p>
+        {note ? <p>{note}</p> : null}
         <p>{insight.historicalTip}</p>
       </div>
     </section>

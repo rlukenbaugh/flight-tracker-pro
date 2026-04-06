@@ -1,6 +1,7 @@
 import {
   useDeferredValue,
   useEffect,
+  useRef,
   useState,
   useTransition,
   type FormEvent,
@@ -39,7 +40,15 @@ import {
   getRouteKey,
   sortFlights,
 } from './lib/flightUtils'
-import { fetchDestinationWeather, searchLiveFlights } from './lib/liveData'
+import {
+  fetchDestinationWeather,
+  fetchLiveRouteIntelligence,
+  searchLiveAirports,
+  searchLiveFlights,
+  type LiveRouteIntelligence,
+} from './lib/liveData'
+import { trackError, trackEvent } from './lib/analytics'
+import { loadCloudUserState, syncCloudUserState } from './lib/cloudState'
 import {
   readAlertPreference,
   readLocalAuthState,
@@ -48,6 +57,7 @@ import {
   writeLocalAuthState,
   writeSavedFlights,
 } from './lib/storage'
+import { livePricingAvailable } from './lib/runtimeConfig'
 import { getAuthStateFromSession, supabase } from './lib/supabase'
 import type {
   AlertPreference,
@@ -59,6 +69,7 @@ import type {
   SavedFlight,
   SearchState,
   SortMode,
+  SyncStatus,
   TimeBucket,
   TripType,
 } from './types'
@@ -123,6 +134,7 @@ function clampFilters(filters: FilterState, maxPrice: number): FilterState {
 }
 
 function App() {
+  const livePricingEnabled = livePricingAvailable
   const defaultSearch = createDefaultSearch()
   const [draftSearch, setDraftSearch] = useState<SearchState>(defaultSearch)
   const [search, setSearch] = useState<SearchState>(defaultSearch)
@@ -136,20 +148,36 @@ function App() {
   const [authState, setAuthState] = useState<AuthState>(() => readLocalAuthState())
   const [authEmail, setAuthEmail] = useState(() => readLocalAuthState().user?.email ?? '')
   const [authMessage, setAuthMessage] = useState<string>()
-  const [dataMode, setDataMode] = useState<DataMode>(
-    import.meta.env.VITE_ENABLE_LIVE_FLIGHTS === 'true' ? 'live' : 'mock',
-  )
+  const [accountSyncStatus, setAccountSyncStatus] = useState<SyncStatus>('local-only')
+  const cloudStateReadyRef = useRef(false)
+  const [dataMode, setDataMode] = useState<DataMode>(livePricingEnabled ? 'live' : 'mock')
   const [liveFlights, setLiveFlights] = useState<FlightResult[]>([])
   const [liveStatus, setLiveStatus] = useState(
-    'Live flights disabled until API env vars are configured.',
+    livePricingEnabled
+      ? 'Live pricing mode is enabled. Real flight offers will come directly from the provider.'
+      : 'Live flights disabled until API env vars are configured.',
   )
   const [weatherSummary, setWeatherSummary] = useState<string>()
   const [weatherStatus, setWeatherStatus] = useState('Ready for live weather lookup.')
+  const [liveRouteIntel, setLiveRouteIntel] = useState<LiveRouteIntelligence>()
+  const [liveRouteIntelStatus, setLiveRouteIntelStatus] = useState(
+    livePricingEnabled
+      ? 'Live route intelligence is loading from provider benchmark and inspiration endpoints.'
+      : 'Route intelligence is using the curated mock layer.',
+  )
+  const [liveAirportLookup, setLiveAirportLookup] = useState<{
+    query: string
+    suggestions: string[]
+  }>({
+    query: '',
+    suggestions: [],
+  })
   const [activeAirportField, setActiveAirportField] = useState<'origin' | 'destination'>('origin')
   const [isPending, startTransition] = useTransition()
 
   const activeRouteKey = getRouteKey(search.origin, search.destination)
-  const routeInsight = routeInsights[activeRouteKey]
+  const mockRouteInsight = routeInsights[activeRouteKey]
+  const routeInsight = dataMode === 'live' ? liveRouteIntel?.insight : mockRouteInsight
   const activeTemplates = flightTemplates.filter(
     (flight) => flight.origin === search.origin && flight.destination === search.destination,
   )
@@ -157,8 +185,7 @@ function App() {
     activeTemplates.length > 0
       ? createFlightResults(activeTemplates, search, routeInsight, filters.flexDays)
       : []
-  const availableResults =
-    dataMode === 'live' && liveFlights.length > 0 ? liveFlights : routeResults
+  const availableResults = dataMode === 'live' ? liveFlights : routeResults
   const priceCap = Math.max(
     600,
     ...availableResults.map((flight) => flight.pricePerTraveler),
@@ -170,7 +197,10 @@ function App() {
   const selectedFlight =
     deferredResults.find((flight) => flight.id === selectedFlightId) ?? deferredResults[0]
   const bestFlight = rankedResults[0]
-  const explorerDestinations = destinationExplorerByOrigin[search.origin] ?? []
+  const explorerDestinations =
+    dataMode === 'live'
+      ? liveRouteIntel?.destinationPoints ?? []
+      : destinationExplorerByOrigin[search.origin] ?? []
   const fallbackAirlineTemplates =
     activeTemplates.length > 0
       ? activeTemplates
@@ -179,12 +209,16 @@ function App() {
     new Set(fallbackAirlineTemplates.map((flight) => flight.airline)),
   ).sort()
   const airportSuggestions =
-    deferredAirportQuery.trim().length > 0
-      ? findAirportMatches(deferredAirportQuery, 10).map((airport) =>
-          [airport.city, airport.state].filter(Boolean).join(', ') +
-          ` (${airport.code}) - ${airport.airport}`,
-        )
-      : airportSearchSuggestions.slice(0, 40)
+    dataMode === 'live' && deferredAirportQuery.trim().length > 1
+      ? liveAirportLookup.query === deferredAirportQuery.trim()
+        ? liveAirportLookup.suggestions
+        : []
+      : deferredAirportQuery.trim().length > 0
+        ? findAirportMatches(deferredAirportQuery, 10).map((airport) =>
+            [airport.city, airport.state].filter(Boolean).join(', ') +
+            ` (${airport.code}) - ${airport.airport}`,
+          )
+        : airportSearchSuggestions.slice(0, 40)
   const savedFlightsWithLivePrices = savedFlights.map((saved) => {
     const live = availableResults.find(
       (flight) =>
@@ -239,7 +273,95 @@ function App() {
   useEffect(() => {
     let cancelled = false
 
-    if (dataMode !== 'live' || import.meta.env.VITE_ENABLE_LIVE_FLIGHTS !== 'true') {
+    if (authState.status !== 'authenticated' || authState.provider !== 'supabase' || !authState.user) {
+      cloudStateReadyRef.current = false
+      queueMicrotask(() => {
+        if (!cancelled) {
+          setAccountSyncStatus('local-only')
+        }
+      })
+      return
+    }
+
+    queueMicrotask(() => {
+      if (!cancelled) {
+        setAccountSyncStatus('syncing')
+      }
+    })
+
+    loadCloudUserState()
+      .then((payload) => {
+        if (cancelled) {
+          return
+        }
+
+        if (payload?.savedFlights) {
+          setSavedFlights(payload.savedFlights)
+        }
+
+        if (payload?.alertPreference) {
+          setAlertPreference(payload.alertPreference)
+        }
+
+        cloudStateReadyRef.current = true
+        setAccountSyncStatus('synced')
+      })
+      .catch((error: unknown) => {
+        if (cancelled) {
+          return
+        }
+
+        cloudStateReadyRef.current = true
+        setAccountSyncStatus('error')
+        setAuthMessage('Account is signed in, but cloud sync could not load. Local state remains available.')
+        trackError('cloud_state.load_failed', error)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [authState.provider, authState.status, authState.user])
+
+  useEffect(() => {
+    let cancelled = false
+
+    if (authState.status !== 'authenticated' || authState.provider !== 'supabase' || !cloudStateReadyRef.current) {
+      return
+    }
+
+    queueMicrotask(() => {
+      if (!cancelled) {
+        setAccountSyncStatus('syncing')
+      }
+    })
+
+    syncCloudUserState({
+      savedFlights,
+      alertPreference,
+    })
+      .then(() => {
+        if (!cancelled) {
+          setAccountSyncStatus('synced')
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setAccountSyncStatus('error')
+          trackError('cloud_state.sync_failed', error, {
+            savedFlightCount: savedFlights.length,
+          })
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [alertPreference, authState.provider, authState.status, savedFlights])
+
+  useEffect(() => {
+    let cancelled = false
+
+    if (dataMode !== 'live' || !livePricingEnabled) {
       return
     }
 
@@ -247,20 +369,31 @@ function App() {
       .then((flights) => {
         if (!cancelled) {
           setLiveFlights(flights)
+          trackEvent({
+            event: 'live_flights.loaded',
+            context: {
+              route: `${search.origin}-${search.destination}`,
+              count: flights.length,
+              flexDays: filters.flexDays,
+            },
+          })
           setLiveStatus(
             flights.length > 0
-              ? `Loaded ${flights.length} live flight offers from the configured provider.`
-              : 'Live provider returned no offers for this route.',
+              ? `Loaded ${flights.length} live bookable fare offers from the configured provider.`
+              : 'The live provider returned no offers for this route and date combination.',
           )
         }
       })
       .catch((error: unknown) => {
         if (!cancelled) {
           setLiveFlights([])
+          trackError('live_flights.failed', error, {
+            route: `${search.origin}-${search.destination}`,
+          })
           setLiveStatus(
             error instanceof Error
-              ? `${error.message}. Falling back to mock inventory.`
-              : 'Live provider request failed. Falling back to mock inventory.',
+              ? `${error.message}. No mock fare fallback is being used.`
+              : 'Live provider request failed. No mock fare fallback is being used.',
           )
         }
       })
@@ -268,7 +401,87 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [dataMode, filters.flexDays, search])
+  }, [dataMode, filters.flexDays, livePricingEnabled, search])
+
+  useEffect(() => {
+    let cancelled = false
+
+    if (dataMode !== 'live' || !livePricingEnabled) {
+      return
+    }
+
+    fetchLiveRouteIntelligence(search)
+      .then((payload) => {
+        if (!cancelled) {
+          setLiveRouteIntel(payload)
+          trackEvent({
+            event: 'route_intelligence.loaded',
+            context: {
+              route: `${search.origin}-${search.destination}`,
+              calendarCount: payload.calendar?.length ?? 0,
+              destinationCount: payload.destinationPoints.length,
+            },
+          })
+          setLiveRouteIntelStatus(
+            payload.calendar?.length || payload.destinationPoints.length || payload.insight
+              ? 'Live route intelligence loaded from provider benchmark, date, and destination endpoints.'
+              : 'Live route intelligence is unavailable for this search.',
+          )
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setLiveRouteIntel(undefined)
+          trackError('route_intelligence.failed', error, {
+            route: `${search.origin}-${search.destination}`,
+          })
+          setLiveRouteIntelStatus(
+            error instanceof Error
+              ? `${error.message}. Simulated route panels have been suppressed.`
+              : 'Live route intelligence failed. Simulated route panels have been suppressed.',
+          )
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [dataMode, livePricingEnabled, search])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const query = deferredAirportQuery.trim()
+
+    if (dataMode !== 'live' || !livePricingEnabled || query.length < 2) {
+      return
+    }
+
+    searchLiveAirports(query)
+      .then((airports) => {
+        if (!cancelled) {
+          setLiveAirportLookup({
+            query,
+            suggestions: airports.map(
+              (airport) =>
+                `${[airport.city, airport.state].filter(Boolean).join(', ')} (${airport.code}) - ${airport.airport}`,
+            ),
+          })
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setLiveAirportLookup({
+            query,
+            suggestions: [],
+          })
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [dataMode, deferredAirportQuery, livePricingEnabled])
 
   useEffect(() => {
     let cancelled = false
@@ -300,14 +513,46 @@ function App() {
   }
 
   function updateSearch(nextSearch: SearchState) {
+    const normalizedSearch = {
+      ...nextSearch,
+      origin: resolveAirportCode(nextSearch.origin),
+      destination: resolveAirportCode(nextSearch.destination),
+    }
+
     startTransition(() => {
-      setSearch({
-        ...nextSearch,
-        origin: resolveAirportCode(nextSearch.origin),
-        destination: resolveAirportCode(nextSearch.destination),
-      })
+      setSearch(normalizedSearch)
       setSelectedFlightId('')
     })
+
+    trackEvent({
+      event: 'search.updated',
+      context: {
+        route: `${normalizedSearch.origin}-${normalizedSearch.destination}`,
+        tripType: normalizedSearch.tripType,
+        travelers: normalizedSearch.travelers,
+        cabinClass: normalizedSearch.cabinClass,
+      },
+    })
+
+    if (
+      authState.status === 'authenticated' &&
+      authState.provider === 'supabase' &&
+      cloudStateReadyRef.current
+    ) {
+      setAccountSyncStatus('syncing')
+      void syncCloudUserState({
+        savedSearch: normalizedSearch,
+      })
+        .then(() => {
+          setAccountSyncStatus('synced')
+        })
+        .catch((error: unknown) => {
+          setAccountSyncStatus('error')
+          trackError('saved_search.sync_failed', error, {
+            route: `${normalizedSearch.origin}-${normalizedSearch.destination}`,
+          })
+        })
+    }
   }
 
   function handleSearchSubmit(event: FormEvent<HTMLFormElement>) {
@@ -366,6 +611,8 @@ function App() {
       user: null,
       provider: supabase ? 'supabase' : 'local',
     })
+    cloudStateReadyRef.current = false
+    setAccountSyncStatus('local-only')
     setAuthMessage('Signed out. Saved watches remain available locally.')
   }
 
@@ -458,19 +705,42 @@ function App() {
     })
   }
 
-  const recommendation = buildRouteRecommendation(routeInsight, bestFlight)
+  const recommendation =
+    dataMode === 'live'
+      ? routeInsight && bestFlight
+        ? buildRouteRecommendation(routeInsight, bestFlight)
+        : bestFlight
+          ? 'Live pricing is active. Compare this fare against the live benchmark panels, but treat bookability and timing as the final decision drivers.'
+          : 'No live offers were returned for this route, so there is no pricing recommendation to rank yet.'
+      : buildRouteRecommendation(routeInsight, bestFlight)
   const bestLiveFare = bestFlight ? formatCurrency(bestFlight.pricePerTraveler) : '—'
   const displayedLiveStatus =
-    dataMode !== 'live' || import.meta.env.VITE_ENABLE_LIVE_FLIGHTS !== 'true'
+    dataMode !== 'live' || !livePricingEnabled
       ? 'Using curated mock inventory.'
       : liveStatus
   const resultsSummary =
     deferredResults.length > 0
       ? `${deferredResults.length} flights ranked for ${search.origin} to ${search.destination}`
-      : 'No flights match the current filter stack'
+      : dataMode === 'live'
+        ? `No live flights found for ${search.origin} to ${search.destination}`
+        : 'No flights match the current filter stack'
   const selectedSaved = selectedFlight
     ? savedFlightsWithLivePrices.some((item) => item.id === selectedFlight.id)
     : false
+  const heatmapCalendar = dataMode === 'live' ? liveRouteIntel?.calendar ?? [] : routeInsight?.calendar ?? []
+  const heatmapWeek = dataMode === 'live' ? liveRouteIntel?.cheapestWeek ?? 'No live cheapest-week data' : routeInsight?.cheapestWeek ?? ''
+  const trendSourceLabel =
+    dataMode === 'live'
+      ? liveRouteIntel?.sources.benchmark ?? 'Live provider benchmark'
+      : 'Simulated market trend model'
+  const heatmapSourceLabel =
+    dataMode === 'live'
+      ? liveRouteIntel?.sources.calendar ?? 'Live provider date pricing'
+      : 'Simulated flexible-date pricing'
+  const mapSourceLabel =
+    dataMode === 'live'
+      ? liveRouteIntel?.sources.destinations ?? 'Live provider inspiration fares'
+      : 'Simulated destination map pricing'
 
   return (
     <div className="app-shell">
@@ -519,6 +789,12 @@ function App() {
               <span>{dataMode === 'live' ? 'Live API mode' : 'Mock mode'}</span>
               <span>{displayedLiveStatus}</span>
             </div>
+            {dataMode === 'live' ? (
+              <div className="hero-caption">
+                <span>Live route intelligence</span>
+                <span>{liveRouteIntelStatus}</span>
+              </div>
+            ) : null}
           </div>
 
           <form className="search-panel" onSubmit={handleSearchSubmit}>
@@ -630,8 +906,9 @@ function App() {
 
             <div className="search-footer">
               <p>
-                Searches can use curated mock fares or switch to a live provider path when the API
-                layer is configured.
+                {livePricingEnabled
+                  ? 'Live pricing mode is active. No simulated fare fallback will be shown if the provider returns no offers.'
+                  : 'Searches use curated mock fares until the live provider env vars are configured.'}
               </p>
               <button type="submit" className="primary-button" data-testid="search-submit">
                 {isPending ? 'Refreshing route...' : 'Search flights'}
@@ -896,26 +1173,54 @@ function App() {
           </div>
 
           <div className="intel-grid">
-            <TrendChart insight={routeInsight} bestFare={bestFlight?.pricePerTraveler} />
+            <TrendChart
+              insight={routeInsight}
+              bestFare={bestFlight?.pricePerTraveler}
+              sourceLabel={trendSourceLabel}
+              note={
+                dataMode === 'live'
+                  ? 'This card uses live provider benchmark metrics. It is not a guaranteed forward price forecast.'
+                  : 'This card is still simulated in mock mode.'
+              }
+              emptyMessage={
+                dataMode === 'live'
+                  ? 'Live benchmark intelligence is not available for this search yet.'
+                  : 'Select a supported route to unlock fare history and trend intelligence.'
+              }
+            />
             <ContextPanel
               flight={selectedFlight}
               insight={routeInsight}
               recommendation={recommendation}
               weatherSummary={weatherSummary}
+              recommendationSource={
+                dataMode === 'live'
+                  ? routeInsight
+                    ? 'Live offer plus provider benchmark'
+                    : 'Live offer only'
+                  : 'Simulated recommendation model'
+              }
+              supportNote={
+                dataMode === 'live'
+                  ? 'Buy/wait guidance is benchmarked from live provider data where available. It is advisory, not a booking guarantee.'
+                  : 'This recommendation is simulated in mock mode.'
+              }
             />
           </div>
 
           <div className="support-grid">
             <DataModePanel
               dataMode={dataMode}
-              liveEnabled={import.meta.env.VITE_ENABLE_LIVE_FLIGHTS === 'true'}
+              liveEnabled={livePricingEnabled}
               authState={authState}
               liveStatus={displayedLiveStatus}
               weatherStatus={weatherStatus}
               onChangeMode={setDataMode}
+              liveOnly={livePricingEnabled}
             />
             <AuthPanel
               authState={authState}
+              syncStatus={accountSyncStatus}
               email={authEmail}
               message={authMessage}
               onEmailChange={setAuthEmail}
@@ -927,12 +1232,18 @@ function App() {
             <AboutPanel />
           </div>
 
-          {routeInsight ? (
+          {routeInsight || heatmapCalendar.length > 0 ? (
             <DateHeatmap
-              calendar={routeInsight.calendar}
+              calendar={heatmapCalendar}
               selectedDate={search.departureDate}
-              cheapestWeek={routeInsight.cheapestWeek}
+              cheapestWeek={heatmapWeek}
               onSelectDate={applyHeatmapDate}
+              sourceLabel={heatmapSourceLabel}
+              emptyMessage={
+                dataMode === 'live'
+                  ? 'Live cheapest-date pricing is not available from the provider for this search yet.'
+                  : 'Select a supported route to unlock flexible-date pricing.'
+              }
             />
           ) : null}
 
@@ -941,14 +1252,21 @@ function App() {
             selectedDestination={search.destination}
             destinations={explorerDestinations}
             onSelectDestination={applyDestination}
+            sourceLabel={mapSourceLabel}
+            emptyMessage={
+              dataMode === 'live'
+                ? `Live destination inspiration pricing is not available from ${search.origin} yet.`
+                : `Select an origin with a simulated destination map to explore.`
+            }
           />
 
-          <SavedFlightsPanel flights={savedFlightsWithLivePrices} />
+          <SavedFlightsPanel flights={savedFlightsWithLivePrices} syncStatus={accountSyncStatus} />
 
           <div className="support-grid">
             <AlertCenterPanel
               preferences={alertPreference}
               authState={authState}
+              syncStatus={accountSyncStatus}
               onToggle={toggleAlertSetting}
             />
             <PremiumPlansPanel plans={premiumPlans} />
@@ -970,8 +1288,9 @@ function App() {
               <div className="panel empty-panel" data-testid="empty-results">
                 <h3>No flights match this stack</h3>
                 <p>
-                  Try widening the price range, allowing one stop, or switching to one of the map
-                  explorer destinations.
+                  {dataMode === 'live'
+                    ? 'Try widening the price range, allowing one stop, changing the dates, or searching a busier route. No simulated fallback fares are being shown.'
+                    : 'Try widening the price range, allowing one stop, or switching to one of the map explorer destinations.'}
                 </p>
               </div>
             )}

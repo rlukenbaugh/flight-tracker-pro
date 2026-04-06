@@ -1,11 +1,12 @@
-import type { SavedFlight } from '../types'
+import type { SavedFlight, SyncStatus } from '../types'
 import { formatCurrency } from '../lib/flightUtils'
 
 interface SavedFlightsPanelProps {
   flights: SavedFlight[]
+  syncStatus: SyncStatus
 }
 
-export function SavedFlightsPanel({ flights }: SavedFlightsPanelProps) {
+export function SavedFlightsPanel({ flights, syncStatus }: SavedFlightsPanelProps) {
   return (
     <section className="panel saved-panel">
       <div className="section-intro">
@@ -13,6 +14,15 @@ export function SavedFlightsPanel({ flights }: SavedFlightsPanelProps) {
           <span className="eyebrow">Saved Flights & Alerts</span>
           <h2>Track watched options and price movement in one place</h2>
         </div>
+        <span className="section-aside">
+          {syncStatus === 'local-only'
+            ? 'Local-only'
+            : syncStatus === 'syncing'
+              ? 'Syncing'
+              : syncStatus === 'synced'
+                ? 'Cloud synced'
+                : 'Sync issue'}
+        </span>
       </div>
 
       {flights.length === 0 ? (

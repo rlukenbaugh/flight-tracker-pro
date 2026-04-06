@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { desktopReleaseLinks } from '../data/appConfig'
+import { appEnvironmentLabel } from '../lib/runtimeConfig'
 import type { DesktopAppInfo, DesktopBridge } from '../types'
 
 const webFallback: DesktopAppInfo = {
@@ -7,6 +8,8 @@ const webFallback: DesktopAppInfo = {
   platform: 'browser',
   desktop: false,
   packaged: false,
+  environment: appEnvironmentLabel,
+  releaseChannel: 'preview',
   updateStatus: 'unavailable',
   updateMessage: 'Update checks are only available in the packaged Windows app.',
 }
@@ -84,6 +87,14 @@ export function AboutPanel() {
         <article className="about-stat">
           <span>Updater</span>
           <strong>{appInfo.updateStatus.replace('-', ' ')}</strong>
+        </article>
+        <article className="about-stat">
+          <span>Channel</span>
+          <strong>{appInfo.releaseChannel}</strong>
+        </article>
+        <article className="about-stat">
+          <span>Environment</span>
+          <strong>{appInfo.environment}</strong>
         </article>
       </div>
 

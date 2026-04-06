@@ -190,6 +190,8 @@ export interface AlertPreference {
   nearlySoldOut: boolean
 }
 
+export type SyncStatus = 'local-only' | 'syncing' | 'synced' | 'error'
+
 export interface PremiumPlan {
   id: 'core' | 'elite' | 'concierge'
   name: string
@@ -214,6 +216,8 @@ export interface DesktopAppInfo {
   platform: string
   desktop: boolean
   packaged: boolean
+  environment: string
+  releaseChannel: 'preview' | 'stable' | 'beta'
   updateStatus: DesktopUpdateStatus
   updateMessage: string
 }

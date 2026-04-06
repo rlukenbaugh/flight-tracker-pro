@@ -1,7 +1,8 @@
-import type { AuthState } from '../types'
+import type { AuthState, SyncStatus } from '../types'
 
 interface AuthPanelProps {
   authState: AuthState
+  syncStatus: SyncStatus
   email: string
   message?: string
   onEmailChange: (value: string) => void
@@ -13,6 +14,7 @@ interface AuthPanelProps {
 
 export function AuthPanel({
   authState,
+  syncStatus,
   email,
   message,
   onEmailChange,
@@ -35,7 +37,7 @@ export function AuthPanel({
         <p>
           {message ??
             (authState.user
-            ? `Signed in as ${authState.user.email} via ${authState.provider}.`
+            ? `Signed in as ${authState.user.email} via ${authState.provider}. Sync status: ${syncStatus}.`
             : supabaseEnabled
               ? 'Supabase is configured. Send a magic link or use local preview sign-in.'
               : 'Supabase env vars are not configured, so auth stays in local preview mode.')}

@@ -1,8 +1,9 @@
-import type { AlertPreference, AuthState } from '../types'
+import type { AlertPreference, AuthState, SyncStatus } from '../types'
 
 interface AlertCenterPanelProps {
   preferences: AlertPreference
   authState: AuthState
+  syncStatus: SyncStatus
   onToggle: (key: keyof AlertPreference) => void
 }
 
@@ -16,6 +17,7 @@ const labelByKey: Record<keyof AlertPreference, string> = {
 export function AlertCenterPanel({
   preferences,
   authState,
+  syncStatus,
   onToggle,
 }: AlertCenterPanelProps) {
   return (
@@ -26,7 +28,15 @@ export function AlertCenterPanel({
           <h2>Control the signals worth interrupting your day for</h2>
         </div>
         <span className="section-aside">
-          {authState.user ? 'Synced to account-ready state' : 'Stored locally until sign-in'}
+          {authState.user
+            ? syncStatus === 'synced'
+              ? 'Synced to account'
+              : syncStatus === 'syncing'
+                ? 'Syncing changes'
+                : syncStatus === 'error'
+                  ? 'Sync issue, local copy safe'
+                  : 'Stored locally until Supabase sync is ready'
+            : 'Stored locally until sign-in'}
         </span>
       </div>
 

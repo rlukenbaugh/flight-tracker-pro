@@ -1,101 +1,123 @@
-type HandlerRequest = {
-  method?: string
-  query?: Record<string, string | string[] | undefined>
-}
+import { recordFareSnapshot } from './_database.js'
+import { fetchAmadeusJson, fetchAmadeusToken } from './_amadeus.js'
+import {
+  enforceRateLimit,
+  json,
+  logServerEvent,
+  readSingle,
+  setCommonHeaders,
+  validateDate,
+  validateIataCode,
+  validateTravelerCount,
+  validateTripType,
+  withMemoryCache,
+  type HandlerRequest,
+  type HandlerResponse,
+} from './_http.js'
 
-type HandlerResponse = {
-  status: (code: number) => HandlerResponse
-  json: (body: unknown) => void
-  setHeader: (name: string, value: string) => void
-}
-
-const AUTH_URL = 'https://test.api.amadeus.com/v1/security/oauth2/token'
-const SEARCH_URL = 'https://test.api.amadeus.com/v2/shopping/flight-offers'
-
-function readSingle(value: string | string[] | undefined, fallback = '') {
-  return Array.isArray(value) ? value[0] ?? fallback : value ?? fallback
-}
-
-async function fetchAmadeusToken() {
-  const clientId = process.env.AMADEUS_CLIENT_ID
-  const clientSecret = process.env.AMADEUS_CLIENT_SECRET
-
-  if (!clientId || !clientSecret) {
-    throw new Error('AMADEUS_CLIENT_ID and AMADEUS_CLIENT_SECRET are required for live flights.')
-  }
-
-  const response = await fetch(AUTH_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams({
-      grant_type: 'client_credentials',
-      client_id: clientId,
-      client_secret: clientSecret,
-    }),
-  })
-
-  if (!response.ok) {
-    throw new Error(`Amadeus auth failed with status ${response.status}.`)
-  }
-
-  const payload = (await response.json()) as { access_token: string }
-  return payload.access_token
-}
+const allowedCabinClasses = new Set(['ECONOMY', 'PREMIUM_ECONOMY', 'BUSINESS', 'FIRST'])
 
 export default async function handler(req: HandlerRequest, res: HandlerResponse) {
-  res.setHeader('Access-Control-Allow-Origin', '*')
-  res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600')
+  setCommonHeaders(res, 's-maxage=300, stale-while-revalidate=600')
 
   if (req.method && req.method !== 'GET') {
-    res.status(405).json({ error: 'Method not allowed' })
+    json(res, 405, { error: 'Method not allowed' })
+    return
+  }
+
+  if (!enforceRateLimit(req, res, { scope: 'flight-offers', limit: 20, windowMs: 60_000 })) {
     return
   }
 
   try {
-    const token = await fetchAmadeusToken()
     const origin = readSingle(req.query?.origin).toUpperCase()
     const destination = readSingle(req.query?.destination).toUpperCase()
     const departureDate = readSingle(req.query?.departureDate)
     const returnDate = readSingle(req.query?.returnDate)
     const tripType = readSingle(req.query?.tripType, 'round-trip')
-    const travelers = readSingle(req.query?.travelers, '1')
+    const travelers = Number(readSingle(req.query?.travelers, '1'))
     const cabinClass = readSingle(req.query?.cabinClass, 'ECONOMY').toUpperCase()
 
-    const params = new URLSearchParams({
-      originLocationCode: origin,
-      destinationLocationCode: destination,
-      departureDate,
-      adults: travelers,
-      travelClass: cabinClass.replace(' ', '_'),
-      currencyCode: 'USD',
-      max: '12',
-    })
-
+    validateIataCode(origin, 'Origin')
+    validateIataCode(destination, 'Destination')
+    validateDate(departureDate, 'Departure date')
     if (tripType === 'round-trip' && returnDate) {
-      params.set('returnDate', returnDate)
+      validateDate(returnDate, 'Return date')
+    }
+    validateTripType(tripType)
+    validateTravelerCount(travelers)
+    if (!allowedCabinClasses.has(cabinClass.replace(' ', '_'))) {
+      throw new Error('Cabin class is not supported.')
     }
 
-    const response = await fetch(`${SEARCH_URL}?${params.toString()}`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
+    const cacheKey = [
+      'flight-offers',
+      origin,
+      destination,
+      departureDate,
+      returnDate,
+      tripType,
+      travelers,
+      cabinClass,
+    ].join(':')
+
+    const payload = await withMemoryCache(cacheKey, 5 * 60 * 1000, async () => {
+      const token = await fetchAmadeusToken()
+      return fetchAmadeusJson('/v2/shopping/flight-offers', token, {
+        originLocationCode: origin,
+        destinationLocationCode: destination,
+        departureDate,
+        adults: String(travelers),
+        travelClass: cabinClass.replace(' ', '_'),
+        currencyCode: 'USD',
+        max: '12',
+        returnDate: tripType === 'round-trip' && returnDate ? returnDate : undefined,
+      })
     })
 
-    if (!response.ok) {
-      const details = await response.text()
-      res.status(response.status).json({
-        error: 'Live flight search failed.',
-        details,
+    const offers = ((payload as { data?: Array<{ price?: { grandTotal?: string } }> }).data ?? [])
+      .map((offer) => Number(offer.price?.grandTotal ?? 0))
+      .filter((price) => Number.isFinite(price) && price > 0)
+      .sort((left, right) => left - right)
+
+    if (offers.length > 0) {
+      const midIndex = Math.floor(offers.length / 2)
+      void recordFareSnapshot({
+        routeKey: `${origin}-${destination}`,
+        origin,
+        destination,
+        departureDate,
+        returnDate: tripType === 'round-trip' ? returnDate : undefined,
+        tripType,
+        source: 'amadeus.flight-offers',
+        cheapestPrice: Math.round(offers[0]),
+        medianPrice: Math.round(offers[midIndex]),
+        sampleSize: offers.length,
+        metadata: {
+          travelers,
+          cabinClass,
+        },
+      }).catch((error) => {
+        logServerEvent('warn', 'fare_snapshot.write_failed', {
+          routeKey: `${origin}-${destination}`,
+          message: error instanceof Error ? error.message : 'Unknown fare snapshot failure.',
+        })
       })
-      return
     }
 
-    const payload = await response.json()
-    res.status(200).json(payload)
+    logServerEvent('info', 'flight_offers.success', {
+      routeKey: `${origin}-${destination}`,
+      tripType,
+      travelers,
+      resultCount: offers.length,
+    })
+
+    json(res, 200, payload)
   } catch (error) {
-    res.status(500).json({
+    logServerEvent('error', 'flight_offers.failure', {
+      message: error instanceof Error ? error.message : 'Unexpected live flight failure.',
+    })
+    json(res, 500, {
       error: error instanceof Error ? error.message : 'Unexpected live flight failure.',
     })
   }

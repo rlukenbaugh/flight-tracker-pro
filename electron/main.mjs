@@ -10,6 +10,25 @@ const updaterState = {
 }
 let cachedAutoUpdater = null
 
+function getReleaseChannel() {
+  const configured = (process.env.FLIGHT_TRACKER_RELEASE_CHANNEL || '').toLowerCase()
+
+  if (configured === 'preview' || configured === 'beta' || configured === 'stable') {
+    return configured
+  }
+
+  const version = app.getVersion().toLowerCase()
+  if (version.includes('beta')) {
+    return 'beta'
+  }
+
+  if (version.includes('preview') || version.includes('alpha') || version.includes('rc')) {
+    return 'preview'
+  }
+
+  return 'stable'
+}
+
 function setUpdaterState(status, message) {
   updaterState.status = status
   updaterState.message = message
@@ -38,6 +57,8 @@ function getDesktopAppInfo() {
     platform: process.platform,
     desktop: true,
     packaged: app.isPackaged,
+    environment: process.env.VERCEL_ENV || process.env.NODE_ENV || 'desktop',
+    releaseChannel: getReleaseChannel(),
     updateStatus: updaterState.status,
     updateMessage: updaterState.message,
   }

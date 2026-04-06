@@ -2,6 +2,8 @@
 
 interface ImportMetaEnv {
   readonly VITE_ENABLE_LIVE_FLIGHTS?: string
+  readonly VITE_API_BASE_URL?: string
+  readonly VITE_APP_ENVIRONMENT?: string
   readonly VITE_SUPABASE_URL?: string
   readonly VITE_SUPABASE_ANON_KEY?: string
   readonly VITE_STRIPE_PAYMENT_LINK_ELITE?: string
@@ -21,6 +23,8 @@ interface Window {
       platform: string
       desktop: boolean
       packaged: boolean
+      environment: string
+      releaseChannel: 'preview' | 'stable' | 'beta'
       updateStatus:
         | 'idle'
         | 'checking'
@@ -37,6 +41,8 @@ interface Window {
       platform: string
       desktop: boolean
       packaged: boolean
+      environment: string
+      releaseChannel: 'preview' | 'stable' | 'beta'
       updateStatus:
         | 'idle'
         | 'checking'

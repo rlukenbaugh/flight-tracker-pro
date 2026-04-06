@@ -10,6 +10,8 @@ Premium flight intelligence for travelers who want better booking decisions, now
 - GitHub Releases publish path for auto-updates
 - Supabase-ready auth and alert persistence
 - Live-flight adapter path for Amadeus and live weather from Open-Meteo
+- Vercel-hosted API routes with in-memory cache, request validation, rate limiting, and structured telemetry
+- Supabase schema for saved flights, saved searches, alert rules, fare snapshots, and usage events
 
 ## Local development
 
@@ -56,9 +58,12 @@ Copy `.env.example` and fill in what you need.
 ### App features
 
 - `VITE_ENABLE_LIVE_FLIGHTS=true` enables the live-flight adapter path
+- `VITE_API_BASE_URL` points desktop or alternate frontends at a hosted backend
+- `VITE_APP_ENVIRONMENT` labels the active frontend environment in the UI
 - `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` enable Supabase auth
 - `VITE_STRIPE_PAYMENT_LINK_ELITE` and `VITE_STRIPE_PAYMENT_LINK_CONCIERGE` enable premium checkout buttons
 - `AMADEUS_CLIENT_ID` and `AMADEUS_CLIENT_SECRET` are required by `api/flight-offers.ts`
+- `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` enable hosted API persistence for user state, fare snapshots, and usage telemetry
 
 ### GitHub Releases publishing
 
@@ -70,6 +75,19 @@ The current desktop publish target assumes:
 - GitHub repo: `flight-tracker-pro`
 
 If the final repo name changes, update the `build.publish` block in `package.json`.
+
+## Supabase setup
+
+Apply [`supabase/schema.sql`](supabase/schema.sql) to create the small operational database:
+
+- `user_profiles`
+- `alert_preferences`
+- `saved_flights`
+- `saved_searches`
+- `fare_snapshots`
+- `usage_events`
+
+This keeps account-linked watches, alert rules, and historical fare benchmarks server-side instead of only in local storage.
 
 ## Code signing
 
@@ -126,8 +144,26 @@ Repository secrets required for signed CI releases:
 
 `CSC_LINK` can be a secure file URL or base64-encoded `.pfx` payload, which matches the current electron-builder guidance for Windows CI signing.
 
+## Vercel environments
+
+Use Vercel environment separation so preview deployments can point at preview credentials and production deployments can point at production credentials:
+
+- Preview: test or lower-risk provider credentials, preview Supabase project if desired
+- Production: production provider credentials, production Supabase, final desktop API base URL
+
+The hosted API layer now emits structured logs for:
+
+- flight search success and failure
+- route intelligence success and failure
+- airport search success and failure
+- client telemetry events
+- rate limiting
+
+That gives you immediate runtime monitoring through Vercel logs even before adding a third-party observability vendor.
+
 ## Notes
 
 - The current GitHub publish config is an intentional assumption based on your GitHub owner. If you want a different repo slug, update `package.json`.
 - The live-flight route is desktop-ready, but still depends on real API credentials.
 - Supabase auth and Stripe links are wired with graceful fallback when env vars are missing.
+- Desktop release channels can be labeled with `FLIGHT_TRACKER_RELEASE_CHANNEL` as `stable`, `preview`, or `beta`.

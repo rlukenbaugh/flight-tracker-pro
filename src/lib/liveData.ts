@@ -1,10 +1,63 @@
-import type { CabinClass, FlightResult, SearchState, WeatherSnapshot } from '../types'
+import type {
+  AirportOption,
+  CalendarPrice,
+  CabinClass,
+  DestinationPoint,
+  FlightResult,
+  RouteInsight,
+  SearchState,
+  WeatherSnapshot,
+} from '../types'
 import { destinationCoordinates } from '../data/appConfig'
+import { buildApiUrl } from './runtimeConfig'
 
 interface LiveFlightApiResponse {
   data?: AmadeusFlightOffer[]
   dictionaries?: {
     carriers?: Record<string, string>
+  }
+}
+
+interface LiveAirportSearchResponse {
+  data?: Array<{
+    subType?: string
+    iataCode?: string
+    name?: string
+    address?: {
+      cityName?: string
+      stateCode?: string
+      countryName?: string
+      countryCode?: string
+    }
+  }>
+}
+
+interface LiveRouteIntelligenceResponse {
+  calendar?: CalendarPrice[]
+  cheapestWeek?: string
+  benchmark?: {
+    low: number
+    median: number
+    high: number
+    history: number[]
+  } | null
+  destinationPoints?: DestinationPoint[]
+  sources?: {
+    calendar?: string
+    benchmark?: string
+    destinations?: string
+  }
+}
+
+export interface LiveRouteIntelligence {
+  insight?: RouteInsight
+  calendar?: CalendarPrice[]
+  cheapestWeek?: string
+  destinationPoints: DestinationPoint[]
+  sources: {
+    calendar?: string
+    benchmark?: string
+    destinations?: string
   }
 }
 
@@ -83,6 +136,40 @@ function normalizeInverse(value: number, min: number, max: number) {
   return 100 - ((value - min) / (max - min)) * 100
 }
 
+function buildLiveBenchmarkInsight(
+  search: SearchState,
+  benchmark: NonNullable<LiveRouteIntelligenceResponse['benchmark']>,
+): RouteInsight {
+  const recentAverage = benchmark.median
+  const monthLowest = benchmark.low
+  const weekLowest = Math.min(benchmark.low, benchmark.median)
+  const weeklyChangePercent = 0
+  const summary =
+    recentAverage > 0
+      ? `Live benchmark pricing from the provider shows a median fare near $${recentAverage}, with lows around $${benchmark.low} and upper-range fares near $${benchmark.high}.`
+      : 'Live benchmark pricing is available for this route.'
+
+  return {
+    routeKey: `${search.origin}-${search.destination}`,
+    weekLowest,
+    monthLowest,
+    direction: 'stable',
+    weeklyChangePercent,
+    monthlyAverage: recentAverage,
+    recentAverage,
+    summary,
+    buyRecommendation:
+      'Use the benchmark as a reference point. Final bookable pricing still depends on the specific live flight offer you choose.',
+    historicalTip:
+      'This trend card is based on live provider price metrics, not the older simulated history model.',
+    cheapestWeek: 'Live date sweep active',
+    weatherSummary: 'Destination weather comes from Open-Meteo.',
+    timezoneDifference: 'Live time-zone intelligence not connected yet.',
+    history: benchmark.history,
+    calendar: [],
+  }
+}
+
 export async function searchLiveFlights(
   search: SearchState,
   flexDays: number,
@@ -98,7 +185,7 @@ export async function searchLiveFlights(
     flexDays: String(flexDays),
   })
 
-  const response = await fetch(`/api/flight-offers?${params.toString()}`)
+  const response = await fetch(buildApiUrl(`/api/flight-offers?${params.toString()}`))
 
   if (!response.ok) {
     throw new Error(`Live flight search failed with status ${response.status}`)
@@ -182,6 +269,61 @@ export async function searchLiveFlights(
       }
     })
     .sort((left, right) => left.totalPrice - right.totalPrice)
+}
+
+export async function searchLiveAirports(query: string): Promise<AirportOption[]> {
+  if (query.trim().length < 2) {
+    return []
+  }
+
+  const response = await fetch(
+    buildApiUrl(`/api/airport-search?q=${encodeURIComponent(query)}&max=8`),
+  )
+  if (!response.ok) {
+    throw new Error(`Airport search failed with status ${response.status}`)
+  }
+
+  const payload = (await response.json()) as LiveAirportSearchResponse
+
+  return (payload.data ?? [])
+    .filter((item) => item.iataCode && item.address?.cityName)
+    .map((item) => ({
+      code: item.iataCode ?? '',
+      city: item.address?.cityName ?? item.name ?? 'Unknown city',
+      airport: item.name ?? item.address?.cityName ?? 'Unknown airport',
+      country: item.address?.countryName ?? item.address?.countryCode ?? 'Unknown country',
+      state: item.address?.stateCode,
+      metro: item.address?.cityName,
+      priority: item.subType === 'CITY' ? 95 : 85,
+      aliases: item.subType === 'CITY' ? ['City code'] : undefined,
+    }))
+}
+
+export async function fetchLiveRouteIntelligence(
+  search: SearchState,
+): Promise<LiveRouteIntelligence> {
+  const params = new URLSearchParams({
+    origin: search.origin,
+    destination: search.destination,
+    departureDate: search.departureDate,
+    returnDate: search.returnDate,
+    tripType: search.tripType,
+  })
+
+  const response = await fetch(buildApiUrl(`/api/route-intelligence?${params.toString()}`))
+  if (!response.ok) {
+    throw new Error(`Route intelligence failed with status ${response.status}`)
+  }
+
+  const payload = (await response.json()) as LiveRouteIntelligenceResponse
+
+  return {
+    insight: payload.benchmark ? buildLiveBenchmarkInsight(search, payload.benchmark) : undefined,
+    calendar: payload.calendar,
+    cheapestWeek: payload.cheapestWeek,
+    destinationPoints: payload.destinationPoints ?? [],
+    sources: payload.sources ?? {},
+  }
 }
 
 export async function fetchDestinationWeather(airportCode: string): Promise<WeatherSnapshot | null> {

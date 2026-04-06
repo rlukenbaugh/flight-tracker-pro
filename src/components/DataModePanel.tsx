@@ -7,6 +7,7 @@ interface DataModePanelProps {
   liveStatus: string
   weatherStatus: string
   onChangeMode: (mode: DataMode) => void
+  liveOnly?: boolean
 }
 
 export function DataModePanel({
@@ -16,6 +17,7 @@ export function DataModePanel({
   liveStatus,
   weatherStatus,
   onChangeMode,
+  liveOnly,
 }: DataModePanelProps) {
   return (
     <section className="panel data-mode-panel">
@@ -26,24 +28,34 @@ export function DataModePanel({
         </div>
       </div>
 
-      <div className="segmented-control compact">
-        {(['mock', 'live'] as const).map((mode) => (
-          <button
-            key={mode}
-            type="button"
-            className={dataMode === mode ? 'active' : ''}
-            onClick={() => onChangeMode(mode)}
-            disabled={mode === 'live' && !liveEnabled}
-          >
-            {mode === 'mock' ? 'Mock mode' : 'Live API mode'}
-          </button>
-        ))}
-      </div>
+      {liveOnly ? (
+        <div className="status-pill">Live pricing only</div>
+      ) : (
+        <div className="segmented-control compact">
+          {(['mock', 'live'] as const).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              className={dataMode === mode ? 'active' : ''}
+              onClick={() => onChangeMode(mode)}
+              disabled={mode === 'live' && !liveEnabled}
+            >
+              {mode === 'mock' ? 'Mock mode' : 'Live API mode'}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="status-stack">
         <article>
           <span>Flight provider</span>
-          <strong>{dataMode === 'live' ? liveStatus : 'Using curated mock inventory'}</strong>
+          <strong>
+            {liveOnly
+              ? liveStatus
+              : dataMode === 'live'
+                ? liveStatus
+                : 'Using curated mock inventory'}
+          </strong>
         </article>
         <article>
           <span>Weather</span>

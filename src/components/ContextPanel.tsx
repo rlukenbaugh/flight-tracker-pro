@@ -6,6 +6,8 @@ interface ContextPanelProps {
   insight?: RouteInsight
   recommendation: string
   weatherSummary?: string
+  recommendationSource?: string
+  supportNote?: string
 }
 
 export function ContextPanel({
@@ -13,6 +15,8 @@ export function ContextPanel({
   insight,
   recommendation,
   weatherSummary,
+  recommendationSource,
+  supportNote,
 }: ContextPanelProps) {
   if (!flight) {
     return (
@@ -78,7 +82,9 @@ export function ContextPanel({
 
       <div className="recommendation-card">
         <span>Buy now or wait</span>
+        {recommendationSource ? <small>{recommendationSource}</small> : null}
         <p>{recommendation}</p>
+        {supportNote ? <p>{supportNote}</p> : null}
       </div>
     </aside>
   )

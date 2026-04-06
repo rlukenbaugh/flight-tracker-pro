@@ -6,6 +6,8 @@ interface DestinationMapProps {
   selectedDestination: string
   destinations: DestinationPoint[]
   onSelectDestination: (destination: string) => void
+  sourceLabel?: string
+  emptyMessage?: string
 }
 
 export function DestinationMap({
@@ -13,7 +15,17 @@ export function DestinationMap({
   selectedDestination,
   destinations,
   onSelectDestination,
+  sourceLabel,
+  emptyMessage,
 }: DestinationMapProps) {
+  if (destinations.length === 0) {
+    return (
+      <section className="panel map-panel empty-panel">
+        <p>{emptyMessage ?? `Live destination pricing is not available from ${origin} yet.`}</p>
+      </section>
+    )
+  }
+
   return (
     <section className="panel map-panel">
       <div className="section-intro">
@@ -21,7 +33,10 @@ export function DestinationMap({
           <span className="eyebrow">Destination Map Explorer</span>
           <h2>Scan alternatives from {origin} without leaving the dashboard</h2>
         </div>
-        <p className="section-aside">Click any price marker to pivot the search.</p>
+        <div>
+          <p className="section-aside">Click any price marker to pivot the search.</p>
+          {sourceLabel ? <p className="section-aside">{sourceLabel}</p> : null}
+        </div>
       </div>
 
       <div className="map-surface">
