@@ -1203,6 +1203,7 @@ function App() {
             selectedDestination={search.destination}
             destinations={explorerDestinations}
             onSelectDestination={applyDestination}
+            searchedRouteLabel={`${search.origin} → ${search.destination}`}
             sourceLabel={mapSourceLabel}
             emptyMessage={`Sampled live destination pricing is not available from ${search.origin} yet.`}
           />
@@ -1236,7 +1237,7 @@ function App() {
                 <h3>No flights match this stack</h3>
                 <p>
                   {dataMode === 'live'
-                    ? 'Try widening the price range, allowing one stop, changing the dates, or searching a busier route. No simulated fallback fares are being shown.'
+                    ? `No live fares came back for ${search.origin} to ${search.destination}. Try widening the price range, allowing one stop, changing the dates, or using the alternative destination explorer below. No simulated fallback fares are being shown.`
                     : 'Try widening the price range, allowing one stop, or switching to one of the map explorer destinations.'}
                 </p>
               </div>

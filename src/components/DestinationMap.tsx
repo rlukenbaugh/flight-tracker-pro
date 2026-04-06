@@ -6,6 +6,7 @@ interface DestinationMapProps {
   selectedDestination: string
   destinations: DestinationPoint[]
   onSelectDestination: (destination: string) => void
+  searchedRouteLabel?: string
   sourceLabel?: string
   emptyMessage?: string
 }
@@ -15,6 +16,7 @@ export function DestinationMap({
   selectedDestination,
   destinations,
   onSelectDestination,
+  searchedRouteLabel,
   sourceLabel,
   emptyMessage,
 }: DestinationMapProps) {
@@ -31,10 +33,14 @@ export function DestinationMap({
       <div className="section-intro">
         <div>
           <span className="eyebrow">Destination Map Explorer</span>
-          <h2>Scan alternatives from {origin} without leaving the dashboard</h2>
+          <h2>Scan alternative destinations from {origin} without leaving the dashboard</h2>
         </div>
         <div>
-          <p className="section-aside">Click any price marker to pivot the search.</p>
+          <p className="section-aside">
+            {searchedRouteLabel
+              ? `Current search: ${searchedRouteLabel}. These markers are alternatives from ${origin}.`
+              : 'Click any price marker to pivot the search.'}
+          </p>
           {sourceLabel ? <p className="section-aside">{sourceLabel}</p> : null}
         </div>
       </div>
