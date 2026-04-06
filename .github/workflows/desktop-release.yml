@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 permissions:
   contents: write
 
@@ -32,16 +35,24 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Validate signing secrets
+      - name: Detect signing configuration
+        id: signing
         shell: pwsh
         run: |
           if (-not $env:CSC_LINK) {
-            throw "Missing CSC_LINK. Add a base64-encoded PFX or secure file URL in repository secrets."
+            "enabled=false" >> $env:GITHUB_OUTPUT
+            Write-Warning "CSC_LINK is not configured. The release will be built unsigned."
+            exit 0
           }
 
           if (-not $env:CSC_KEY_PASSWORD) {
-            throw "Missing CSC_KEY_PASSWORD. Add the certificate password in repository secrets."
+            "enabled=false" >> $env:GITHUB_OUTPUT
+            Write-Warning "CSC_KEY_PASSWORD is not configured. The release will be built unsigned."
+            exit 0
           }
+
+          "enabled=true" >> $env:GITHUB_OUTPUT
+          Write-Host "Code signing secrets detected. The release will be signed."
 
       - name: Validate tag matches package version
         if: startsWith(github.ref, 'refs/tags/')
@@ -67,6 +78,12 @@ jobs:
 
       - name: Build desktop release and publish assets
         run: npm run publish:win
+
+      - name: Note unsigned release fallback
+        if: steps.signing.outputs.enabled != 'true'
+        shell: pwsh
+        run: |
+          Write-Host "Release assets were built without Windows code signing because CSC_LINK / CSC_KEY_PASSWORD are not configured."
 
       - name: Generate release notes
         shell: pwsh
