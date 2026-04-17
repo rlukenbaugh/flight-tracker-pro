@@ -9,7 +9,7 @@ Premium flight intelligence for travelers who want better booking decisions, now
 - NSIS installer and portable `.exe` packaging
 - GitHub Releases publish path for auto-updates
 - Supabase-ready auth and alert persistence
-- Live-flight adapter path for Amadeus and live weather from Open-Meteo
+- Live Duffel-powered flight search, airport lookup, sampled route intelligence, and destination weather from Open-Meteo
 - Vercel-hosted API routes with in-memory cache, request validation, rate limiting, and structured telemetry
 - Supabase schema for saved flights, saved searches, alert rules, fare snapshots, and usage events
 
@@ -62,7 +62,8 @@ Copy `.env.example` and fill in what you need.
 - `VITE_APP_ENVIRONMENT` labels the active frontend environment in the UI
 - `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` enable Supabase auth
 - `VITE_STRIPE_PAYMENT_LINK_ELITE` and `VITE_STRIPE_PAYMENT_LINK_CONCIERGE` enable premium checkout buttons
-- `AMADEUS_CLIENT_ID` and `AMADEUS_CLIENT_SECRET` are required by `api/flight-offers.ts`
+- `DUFFEL_API_TOKEN` is required by `api/flight-offers.ts`, `api/route-intelligence.ts`, and `api/airport-search.ts`
+- `DUFFEL_API_BASE_URL` is optional if you need to override the default Duffel API host
 - `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` enable hosted API persistence for user state, fare snapshots, and usage telemetry
 
 ### GitHub Releases publishing
@@ -164,6 +165,6 @@ That gives you immediate runtime monitoring through Vercel logs even before addi
 ## Notes
 
 - The current GitHub publish config is an intentional assumption based on your GitHub owner. If you want a different repo slug, update `package.json`.
-- The live-flight route is desktop-ready, but still depends on real API credentials.
+- The live-flight stack is currently built around Duffel offer requests and sampled Duffel route intelligence, so production behavior still depends on real Duffel credentials.
 - Supabase auth and Stripe links are wired with graceful fallback when env vars are missing.
 - Desktop release channels can be labeled with `FLIGHT_TRACKER_RELEASE_CHANNEL` as `stable`, `preview`, or `beta`.

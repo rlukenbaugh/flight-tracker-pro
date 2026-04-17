@@ -1,10 +1,22 @@
-import type { AlertPreference, AuthState, SyncStatus } from '../types'
+import type {
+  AlertDeliverySettings,
+  AlertEvent,
+  AlertPreference,
+  AuthState,
+  NotificationPermissionState,
+  SyncStatus,
+} from '../types'
 
 interface AlertCenterPanelProps {
   preferences: AlertPreference
+  deliverySettings: AlertDeliverySettings
+  alertFeed: AlertEvent[]
   authState: AuthState
+  notificationPermission: NotificationPermissionState
   syncStatus: SyncStatus
-  onToggle: (key: keyof AlertPreference) => void
+  onTogglePreference: (key: keyof AlertPreference) => void
+  onToggleDelivery: (key: keyof AlertDeliverySettings) => void
+  onSendTestAlert: () => void
 }
 
 const labelByKey: Record<keyof AlertPreference, string> = {
@@ -16,9 +28,14 @@ const labelByKey: Record<keyof AlertPreference, string> = {
 
 export function AlertCenterPanel({
   preferences,
+  deliverySettings,
+  alertFeed,
   authState,
+  notificationPermission,
   syncStatus,
-  onToggle,
+  onTogglePreference,
+  onToggleDelivery,
+  onSendTestAlert,
 }: AlertCenterPanelProps) {
   return (
     <section className="panel alert-panel">
@@ -47,10 +64,79 @@ export function AlertCenterPanel({
             <input
               type="checkbox"
               checked={preferences[key]}
-              onChange={() => onToggle(key)}
+              onChange={() => onTogglePreference(key)}
             />
           </label>
         ))}
+      </div>
+
+      <div className="channel-grid">
+        <article className="channel-card">
+          <div className="section-intro">
+            <div>
+              <span className="eyebrow">Delivery</span>
+              <h2>Route alerts into channels that actually reach you</h2>
+            </div>
+          </div>
+
+          <div className="alert-settings-list">
+            <label className="toggle-row">
+              <span>In-app alert inbox</span>
+              <input
+                type="checkbox"
+                checked={deliverySettings.inAppInbox}
+                onChange={() => onToggleDelivery('inAppInbox')}
+              />
+            </label>
+            <label className="toggle-row">
+              <span>Desktop notifications</span>
+              <input
+                type="checkbox"
+                checked={deliverySettings.desktopNotifications}
+                onChange={() => onToggleDelivery('desktopNotifications')}
+              />
+            </label>
+          </div>
+
+          <p className="notification-status">
+            Notification permission:{' '}
+            <strong>{notificationPermission === 'unsupported' ? 'unsupported' : notificationPermission}</strong>
+          </p>
+
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={onSendTestAlert}
+            disabled={!deliverySettings.inAppInbox && !deliverySettings.desktopNotifications}
+          >
+            Send test alert
+          </button>
+        </article>
+
+        <article className="channel-card">
+          <div className="section-intro">
+            <div>
+              <span className="eyebrow">Alert Feed</span>
+              <h2>Latest delivered watch events</h2>
+            </div>
+          </div>
+
+          {alertFeed.length === 0 ? (
+            <div className="empty-panel compact-empty">
+              <p>Saved flights and live price changes will start filling this feed automatically.</p>
+            </div>
+          ) : (
+            <div className="alert-feed">
+              {alertFeed.slice(0, 5).map((event) => (
+                <article key={event.id} className="alert-feed-item">
+                  <strong>{event.title}</strong>
+                  <span>{event.route}</span>
+                  <p>{event.message}</p>
+                </article>
+              ))}
+            </div>
+          )}
+        </article>
       </div>
     </section>
   )

@@ -1,0 +1,17 @@
+{
+  "name": "Flight Tracker Pro",
+  "short_name": "Flight Tracker Pro",
+  "description": "Live flight search, flexible-date pricing, and booking guidance for smarter travel decisions.",
+  "start_url": "https://flights.rlukenbaugh.org/results",
+  "scope": "https://flights.rlukenbaugh.org/",
+  "display": "standalone",
+  "background_color": "#0b1020",
+  "theme_color": "#0b1020",
+  "icons": [
+    {
+      "src": "/favicon.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

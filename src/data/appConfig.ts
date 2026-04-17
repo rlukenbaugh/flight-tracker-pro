@@ -1,4 +1,4 @@
-import type { AlertPreference, PremiumPlan } from '../types'
+import type { AlertDeliverySettings, AlertPreference, PremiumPlan } from '../types'
 
 export const desktopReleaseLinks = {
   repoUrl: 'https://github.com/rlukenbaugh/flight-tracker-pro',
@@ -10,6 +10,11 @@ export const defaultAlertPreference: AlertPreference = {
   directFlightAvailable: true,
   preferredAirlineDrop: true,
   nearlySoldOut: false,
+}
+
+export const defaultAlertDeliverySettings: AlertDeliverySettings = {
+  inAppInbox: true,
+  desktopNotifications: false,
 }
 
 export const premiumPlans: PremiumPlan[] = [

@@ -1,4 +1,5 @@
-const DEFAULT_HOSTED_API_BASE_URL = 'https://flight-tracker-pro.vercel.app'
+const DEFAULT_HOSTED_API_BASE_URL = 'https://flights.rlukenbaugh.org'
+const DEFAULT_SITE_URL = 'https://flights.rlukenbaugh.org'
 
 function trimTrailingSlash(value: string) {
   return value.replace(/\/+$/, '')
@@ -12,7 +13,16 @@ export const apiBaseUrl =
   import.meta.env.VITE_API_BASE_URL?.replace(/\/+$/, '') ||
   (isPackagedDesktop() ? DEFAULT_HOSTED_API_BASE_URL : '')
 
-export const livePricingAvailable = import.meta.env.VITE_ENABLE_LIVE_FLIGHTS?.trim() === 'true'
+export const siteUrl =
+  import.meta.env.VITE_SITE_URL?.replace(/\/+$/, '') ||
+  (typeof window !== 'undefined' && window.location.protocol !== 'file:'
+    ? trimTrailingSlash(window.location.origin)
+    : DEFAULT_SITE_URL)
+
+const livePricingFlag = import.meta.env.VITE_ENABLE_LIVE_FLIGHTS?.trim().toLowerCase()
+
+export const livePricingAvailable =
+  livePricingFlag === 'true' || (livePricingFlag !== 'false' && Boolean(apiBaseUrl))
 
 export function buildApiUrl(path: string) {
   if (!apiBaseUrl) {

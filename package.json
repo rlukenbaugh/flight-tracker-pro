@@ -4,7 +4,7 @@
   "version": "1.0.4",
   "description": "Premium flight intelligence desktop app for Windows.",
   "author": "rlukenbaugh",
-  "homepage": "https://github.com/rlukenbaugh/flight-tracker-pro",
+  "homepage": "https://flights.rlukenbaugh.org",
   "main": "electron/main.mjs",
   "productName": "Flight Tracker Pro",
   "repository": {
@@ -15,7 +15,8 @@
   "scripts": {
     "dev": "vite",
     "generate:icons": "node scripts/generate-icons.mjs",
-    "build": "tsc -b && vite build",
+    "generate:site-assets": "node scripts/generate-site-assets.mjs",
+    "build": "npm run generate:site-assets && tsc -b && vite build",
     "desktop": "electron .",
     "dist:win": "npm run generate:icons && npm run build && electron-builder --win nsis portable",
     "publish:win": "npm run generate:icons && npm run build && electron-builder --win nsis portable --publish always",

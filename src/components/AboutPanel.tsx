@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { desktopReleaseLinks } from '../data/appConfig'
-import { appEnvironmentLabel } from '../lib/runtimeConfig'
+import { apiBaseUrl, appEnvironmentLabel, buildApiUrl } from '../lib/runtimeConfig'
 import type { DesktopAppInfo, DesktopBridge } from '../types'
 
 const webFallback: DesktopAppInfo = {
@@ -22,9 +22,28 @@ function desktopBridge(): DesktopBridge | undefined {
   return window.flightTrackerDesktop
 }
 
+type ApiHealthState = {
+  status: 'checking' | 'reachable' | 'unreachable' | 'disabled'
+  detail: string
+  host: string
+}
+
 export function AboutPanel() {
   const [appInfo, setAppInfo] = useState<DesktopAppInfo>(webFallback)
   const [isChecking, setIsChecking] = useState(false)
+  const [apiHealth, setApiHealth] = useState<ApiHealthState>(() =>
+    apiBaseUrl
+      ? {
+          status: 'checking',
+          detail: 'Checking hosted API reachability.',
+          host: apiBaseUrl,
+        }
+      : {
+          status: 'disabled',
+          detail: 'No hosted API base URL is configured for this build.',
+          host: 'Not configured',
+        },
+  )
   const releaseNotesUrl =
     appInfo.version === 'web-preview'
       ? desktopReleaseLinks.latestReleaseUrl
@@ -45,7 +64,67 @@ export function AboutPanel() {
       .catch(() => {
         setAppInfo(webFallback)
       })
+
+    void checkApiHealth()
   }, [])
+
+  async function checkApiHealth() {
+    if (!apiBaseUrl) {
+      setApiHealth({
+        status: 'disabled',
+        detail: 'No hosted API base URL is configured for this build.',
+        host: 'Not configured',
+      })
+      return
+    }
+
+    setApiHealth({
+      status: 'checking',
+      detail: 'Checking hosted API reachability.',
+      host: apiBaseUrl,
+    })
+
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), 4_000)
+
+    try {
+      const response = await fetch(buildApiUrl('/api/health'), {
+        signal: controller.signal,
+      })
+
+      if (!response.ok) {
+        throw new Error(`Health check failed with status ${response.status}`)
+      }
+
+      const payload = (await response.json()) as {
+        ok?: boolean
+        environment?: string
+        providers?: {
+          flightOffers?: boolean
+          supabase?: boolean
+        }
+      }
+
+      setApiHealth({
+        status: payload.ok ? 'reachable' : 'unreachable',
+        detail: payload.ok
+          ? `API reachable in ${payload.environment ?? 'unknown'} mode. Flight provider ${payload.providers?.flightOffers ? 'configured' : 'not configured'}, Supabase ${payload.providers?.supabase ? 'configured' : 'not configured'}.`
+          : 'Health endpoint responded without an OK status.',
+        host: apiBaseUrl,
+      })
+    } catch (error) {
+      setApiHealth({
+        status: 'unreachable',
+        detail:
+          error instanceof Error
+            ? error.message
+            : 'Unable to reach the configured API host.',
+        host: apiBaseUrl,
+      })
+    } finally {
+      window.clearTimeout(timeout)
+    }
+  }
 
   async function handleCheckForUpdates() {
     const bridge = desktopBridge()
@@ -89,6 +168,10 @@ export function AboutPanel() {
           <strong>{appInfo.updateStatus.replace('-', ' ')}</strong>
         </article>
         <article className="about-stat">
+          <span>API reachability</span>
+          <strong>{apiHealth.status}</strong>
+        </article>
+        <article className="about-stat">
           <span>Channel</span>
           <strong>{appInfo.releaseChannel}</strong>
         </article>
@@ -96,19 +179,35 @@ export function AboutPanel() {
           <span>Environment</span>
           <strong>{appInfo.environment}</strong>
         </article>
+        <article className="about-stat">
+          <span>API host</span>
+          <strong>{apiHealth.host}</strong>
+        </article>
       </div>
 
       <p className="about-copy">{appInfo.updateMessage}</p>
+      <p className="about-copy">{apiHealth.detail}</p>
 
       <div className="about-actions">
-        <button
-          type="button"
-          className="primary-button subtle"
-          onClick={handleCheckForUpdates}
-          disabled={isChecking}
-        >
-          {isChecking ? 'Checking for updates...' : 'Check for updates'}
-        </button>
+        <div className="about-link-row">
+          <button
+            type="button"
+            className="primary-button subtle"
+            onClick={handleCheckForUpdates}
+            disabled={isChecking}
+          >
+            {isChecking ? 'Checking for updates...' : 'Check for updates'}
+          </button>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => {
+              void checkApiHealth()
+            }}
+          >
+            Check API reachability
+          </button>
+        </div>
         <div className="about-link-row">
           <a
             className="ghost-button about-link"

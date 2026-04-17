@@ -1,8 +1,18 @@
-import type { AlertPreference, AuthState, SavedFlight } from '../types'
+import type {
+  AlertDeliverySettings,
+  AlertEvent,
+  AlertPreference,
+  AuthState,
+  RecentSearchEntry,
+  SavedFlight,
+} from '../types'
 
 const SAVED_FLIGHTS_KEY = 'flight-tracker-pro:saved-flights'
 const ALERT_PREFS_KEY = 'flight-tracker-pro:alert-preferences'
 const AUTH_KEY = 'flight-tracker-pro:auth-state'
+const RECENT_SEARCHES_KEY = 'flight-tracker-pro:recent-searches'
+const ALERT_DELIVERY_KEY = 'flight-tracker-pro:alert-delivery-settings'
+const ALERT_EVENTS_KEY = 'flight-tracker-pro:alert-events'
 
 function readJson<T>(key: string, fallback: T): T {
   if (typeof window === 'undefined') {
@@ -51,4 +61,28 @@ export function readLocalAuthState() {
 
 export function writeLocalAuthState(value: AuthState) {
   writeJson(AUTH_KEY, value)
+}
+
+export function readRecentSearches() {
+  return readJson<RecentSearchEntry[]>(RECENT_SEARCHES_KEY, [])
+}
+
+export function writeRecentSearches(value: RecentSearchEntry[]) {
+  writeJson(RECENT_SEARCHES_KEY, value)
+}
+
+export function readAlertDeliverySettings(fallback: AlertDeliverySettings) {
+  return readJson<AlertDeliverySettings>(ALERT_DELIVERY_KEY, fallback)
+}
+
+export function writeAlertDeliverySettings(value: AlertDeliverySettings) {
+  writeJson(ALERT_DELIVERY_KEY, value)
+}
+
+export function readAlertEvents() {
+  return readJson<AlertEvent[]>(ALERT_EVENTS_KEY, [])
+}
+
+export function writeAlertEvents(value: AlertEvent[]) {
+  writeJson(ALERT_EVENTS_KEY, value)
 }

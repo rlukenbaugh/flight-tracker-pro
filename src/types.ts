@@ -34,6 +34,12 @@ export interface SearchState {
   cabinClass: CabinClass
 }
 
+export interface RecentSearchEntry {
+  id: string
+  search: SearchState
+  lastViewedAt: string
+}
+
 export type DataMode = 'mock' | 'live'
 
 export interface FilterState {
@@ -190,7 +196,30 @@ export interface AlertPreference {
   nearlySoldOut: boolean
 }
 
+export interface AlertDeliverySettings {
+  inAppInbox: boolean
+  desktopNotifications: boolean
+}
+
+export type AlertEventKind =
+  | 'price-drop'
+  | 'direct-flight'
+  | 'preferred-airline-drop'
+  | 'nearly-sold-out'
+  | 'test'
+
+export interface AlertEvent {
+  id: string
+  kind: AlertEventKind
+  title: string
+  message: string
+  route: string
+  createdAt: string
+}
+
 export type SyncStatus = 'local-only' | 'syncing' | 'synced' | 'error'
+
+export type NotificationPermissionState = NotificationPermission | 'unsupported'
 
 export interface PremiumPlan {
   id: 'core' | 'elite' | 'concierge'

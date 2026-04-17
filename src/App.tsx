@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useDeferredValue,
   useEffect,
   useRef,
@@ -16,9 +17,11 @@ import { DateHeatmap } from './components/DateHeatmap'
 import { DestinationMap } from './components/DestinationMap'
 import { FlightCard } from './components/FlightCard'
 import { PremiumPlansPanel } from './components/PremiumPlansPanel'
+import { RecentSearchesPanel } from './components/RecentSearchesPanel'
 import { SavedFlightsPanel } from './components/SavedFlightsPanel'
 import { TrendChart } from './components/TrendChart'
 import {
+  defaultAlertDeliverySettings,
   defaultAlertPreference,
   premiumPlans,
 } from './data/appConfig'
@@ -45,21 +48,31 @@ import {
 import { trackError, trackEvent } from './lib/analytics'
 import { loadCloudUserState, syncCloudUserState } from './lib/cloudState'
 import {
+  readAlertDeliverySettings,
+  readAlertEvents,
   readAlertPreference,
   readLocalAuthState,
+  readRecentSearches,
   readSavedFlights,
+  writeAlertDeliverySettings,
+  writeAlertEvents,
   writeAlertPreference,
   writeLocalAuthState,
+  writeRecentSearches,
   writeSavedFlights,
 } from './lib/storage'
-import { livePricingAvailable } from './lib/runtimeConfig'
+import { livePricingAvailable, siteUrl } from './lib/runtimeConfig'
 import { getAuthStateFromSession, supabase } from './lib/supabase'
 import type {
+  AlertDeliverySettings,
+  AlertEvent,
   AlertPreference,
   AuthState,
   CabinClass,
   FilterState,
   FlightResult,
+  NotificationPermissionState,
+  RecentSearchEntry,
   SavedFlight,
   SearchState,
   SortMode,
@@ -69,6 +82,32 @@ import type {
 } from './types'
 
 const DAY_MS = 24 * 60 * 60 * 1000
+const MAX_RECENT_SEARCHES = 6
+const MAX_ALERT_EVENTS = 12
+type AppView = 'results' | 'dates' | 'map' | 'saved'
+
+const viewMeta: Record<AppView, { title: string; description: string }> = {
+  results: {
+    title: 'Live Flight Results',
+    description:
+      'Search live flight offers, compare fare quality, and share deep links for this route.',
+  },
+  dates: {
+    title: 'Flexible Date Pricing',
+    description:
+      'Explore flexible-date pricing and sampled fare patterns to decide when to book.',
+  },
+  map: {
+    title: 'Destination Map',
+    description:
+      'Compare destination pricing from your origin and spot better-value alternate routes.',
+  },
+  saved: {
+    title: 'Saved Watches and Alerts',
+    description:
+      'Review saved trips, alert preferences, and synced route watches in one place.',
+  },
+}
 
 const cabinOptions: CabinClass[] = ['Economy', 'Premium Economy', 'Business', 'First']
 const tripOptions: TripType[] = ['round-trip', 'one-way']
@@ -88,6 +127,36 @@ const timeWindowOptions: { value: TimeBucket; label: string }[] = [
   { value: 'evening', label: 'Evening' },
   { value: 'overnight', label: 'Overnight' },
 ]
+const viewOptions: Array<{ value: AppView; label: string; path: string }> = [
+  { value: 'results', label: 'Results', path: '/results' },
+  { value: 'dates', label: 'Dates', path: '/dates' },
+  { value: 'map', label: 'Map', path: '/map' },
+  { value: 'saved', label: 'Saved', path: '/saved' },
+]
+
+function isIsoDate(value: string | null) {
+  return Boolean(value && /^\d{4}-\d{2}-\d{2}$/.test(value))
+}
+
+function normalizeViewFromPath(pathname: string): AppView {
+  if (pathname === '/dates') {
+    return 'dates'
+  }
+
+  if (pathname === '/map') {
+    return 'map'
+  }
+
+  if (pathname === '/saved') {
+    return 'saved'
+  }
+
+  return 'results'
+}
+
+function buildPathForView(view: AppView) {
+  return viewOptions.find((option) => option.value === view)?.path ?? '/results'
+}
 
 function addDaysToIso(baseIso: string, offset: number) {
   const date = new Date(`${baseIso}T12:00:00`)
@@ -127,29 +196,183 @@ function clampFilters(filters: FilterState, maxPrice: number): FilterState {
   }
 }
 
+function readSearchStateFromLocation(defaultSearch: SearchState): SearchState {
+  if (typeof window === 'undefined') {
+    return defaultSearch
+  }
+
+  const params = new URLSearchParams(window.location.search)
+  const tripType = params.get('tripType') === 'one-way' ? 'one-way' : 'round-trip'
+  const travelers = Number(params.get('travelers') ?? defaultSearch.travelers)
+  const cabinParam = params.get('cabinClass')
+  const cabinClass = cabinOptions.includes(cabinParam as CabinClass)
+    ? (cabinParam as CabinClass)
+    : defaultSearch.cabinClass
+  const departureDate = isIsoDate(params.get('departureDate'))
+    ? (params.get('departureDate') as string)
+    : defaultSearch.departureDate
+  const returnDate = isIsoDate(params.get('returnDate'))
+    ? (params.get('returnDate') as string)
+    : tripType === 'round-trip'
+      ? defaultSearch.returnDate
+      : defaultSearch.returnDate
+
+  return {
+    origin: resolveAirportCode(params.get('origin') ?? defaultSearch.origin),
+    destination: resolveAirportCode(params.get('destination') ?? defaultSearch.destination),
+    departureDate,
+    returnDate,
+    tripType,
+    travelers:
+      Number.isFinite(travelers) && travelers >= 1 && travelers <= 5
+        ? travelers
+        : defaultSearch.travelers,
+    cabinClass,
+  }
+}
+
+function buildUrlForView(view: AppView, search: SearchState) {
+  const params = new URLSearchParams()
+  params.set('origin', resolveAirportCode(search.origin))
+  params.set('destination', resolveAirportCode(search.destination))
+  params.set('departureDate', search.departureDate)
+  params.set('tripType', search.tripType)
+  params.set('travelers', String(search.travelers))
+  params.set('cabinClass', search.cabinClass)
+
+  if (search.tripType === 'round-trip') {
+    params.set('returnDate', search.returnDate)
+  }
+
+  return `${buildPathForView(view)}?${params.toString()}`
+}
+
+function updateDocumentMetadata(view: AppView, search: SearchState) {
+  if (typeof document === 'undefined') {
+    return
+  }
+
+  const viewDetails = viewMeta[view]
+  const routeLabel = `${search.origin} to ${search.destination}`
+  const title = `${viewDetails.title} | Flight Tracker Pro`
+  const description = `${viewDetails.description} Route: ${routeLabel}.`
+
+  document.title = title
+
+  let descriptionTag = document.querySelector('meta[name="description"]')
+  if (!descriptionTag) {
+    descriptionTag = document.createElement('meta')
+    descriptionTag.setAttribute('name', 'description')
+    document.head.append(descriptionTag)
+  }
+  descriptionTag.setAttribute('content', description)
+
+  if (typeof window !== 'undefined' && window.location.protocol === 'file:') {
+    return
+  }
+
+  let canonicalTag = document.querySelector('link[rel="canonical"]')
+  if (!canonicalTag) {
+    canonicalTag = document.createElement('link')
+    canonicalTag.setAttribute('rel', 'canonical')
+    document.head.append(canonicalTag)
+  }
+  canonicalTag.setAttribute('href', `${siteUrl}${buildUrlForView(view, search)}`)
+}
+
+function readViewStateFromLocation() {
+  if (typeof window === 'undefined') {
+    return 'results' as AppView
+  }
+
+  return normalizeViewFromPath(window.location.pathname)
+}
+
+function buildRecentSearchId(search: SearchState) {
+  return [
+    search.origin,
+    search.destination,
+    search.departureDate,
+    search.returnDate,
+    search.tripType,
+    search.travelers,
+    search.cabinClass,
+  ].join(':')
+}
+
+function buildRecentSearchEntry(
+  search: SearchState,
+  lastViewedAt = new Date().toISOString(),
+): RecentSearchEntry {
+  return {
+    id: buildRecentSearchId(search),
+    search,
+    lastViewedAt,
+  }
+}
+
+function mergeRecentSearches(entries: RecentSearchEntry[]) {
+  const byId = new Map<string, RecentSearchEntry>()
+
+  for (const entry of entries) {
+    const existing = byId.get(entry.id)
+    if (!existing || existing.lastViewedAt < entry.lastViewedAt) {
+      byId.set(entry.id, entry)
+    }
+  }
+
+  return Array.from(byId.values())
+    .sort((left, right) => right.lastViewedAt.localeCompare(left.lastViewedAt))
+    .slice(0, MAX_RECENT_SEARCHES)
+}
+
+function routeLabelFromSearch(search: SearchState) {
+  return `${search.origin} → ${search.destination}`
+}
+
+function getNotificationPermissionState(): NotificationPermissionState {
+  if (typeof Notification === 'undefined') {
+    return 'unsupported'
+  }
+
+  return Notification.permission
+}
+
 function App() {
   const livePricingEnabled = livePricingAvailable
-  const defaultSearch = createDefaultSearch()
-  const [draftSearch, setDraftSearch] = useState<SearchState>(defaultSearch)
-  const [search, setSearch] = useState<SearchState>(defaultSearch)
+  const [defaultSearch] = useState(() => createDefaultSearch())
+  const initialSearch = readSearchStateFromLocation(defaultSearch)
+  const [draftSearch, setDraftSearch] = useState<SearchState>(initialSearch)
+  const [search, setSearch] = useState<SearchState>(initialSearch)
+  const [activeView, setActiveView] = useState<AppView>(() => readViewStateFromLocation())
   const [filters, setFilters] = useState<FilterState>(buildDefaultFilters())
   const [sortMode, setSortMode] = useState<SortMode>('best-value')
   const [selectedFlightId, setSelectedFlightId] = useState('')
   const [savedFlights, setSavedFlights] = useState<SavedFlight[]>(() => readSavedFlights())
+  const [recentSearches, setRecentSearches] = useState<RecentSearchEntry[]>(() =>
+    readRecentSearches(),
+  )
   const [alertPreference, setAlertPreference] = useState<AlertPreference>(() =>
     readAlertPreference(defaultAlertPreference),
   )
+  const [alertDeliverySettings, setAlertDeliverySettings] = useState<AlertDeliverySettings>(
+    () => readAlertDeliverySettings(defaultAlertDeliverySettings),
+  )
+  const [alertFeed, setAlertFeed] = useState<AlertEvent[]>(() => readAlertEvents())
   const [authState, setAuthState] = useState<AuthState>(() => readLocalAuthState())
   const [authEmail, setAuthEmail] = useState(() => readLocalAuthState().user?.email ?? '')
   const [authMessage, setAuthMessage] = useState<string>()
   const [accountSyncStatus, setAccountSyncStatus] = useState<SyncStatus>('local-only')
+  const [notificationPermission, setNotificationPermission] =
+    useState<NotificationPermissionState>(() => getNotificationPermissionState())
   const cloudStateReadyRef = useRef(false)
+  const alertEventIdsRef = useRef(new Set(readAlertEvents().map((event) => event.id)))
   const dataMode = 'live' as const
   const [liveFlights, setLiveFlights] = useState<FlightResult[]>([])
   const [liveStatus, setLiveStatus] = useState(
     livePricingEnabled
-      ? 'Live pricing mode is enabled. Real flight offers will come directly from the provider.'
-      : 'Live flights disabled until API env vars are configured.',
+      ? 'Live pricing mode is enabled. Real flight offers will come directly from the configured API.'
+      : 'Live pricing is disabled because no live API endpoint is configured.',
   )
   const [weatherSummary, setWeatherSummary] = useState<string>()
   const [weatherStatus, setWeatherStatus] = useState('Ready for live weather lookup.')
@@ -157,7 +380,7 @@ function App() {
   const [liveRouteIntelStatus, setLiveRouteIntelStatus] = useState(
     livePricingEnabled
       ? 'Live route intelligence is loading from sampled provider searches.'
-      : 'Route intelligence is unavailable until the live provider is configured.',
+      : 'Route intelligence is unavailable until a live API endpoint is configured.',
   )
   const [liveAirportLookup, setLiveAirportLookup] = useState<{
     query: string
@@ -167,6 +390,7 @@ function App() {
     suggestions: [],
   })
   const [activeAirportField, setActiveAirportField] = useState<'origin' | 'destination'>('origin')
+  const [shareStatus, setShareStatus] = useState('')
   const [isPending, startTransition] = useTransition()
 
   const routeInsight = liveRouteIntel?.insight
@@ -207,19 +431,88 @@ function App() {
     }
   })
 
+  function syncLocationState(view: AppView, nextSearch: SearchState, mode: 'push' | 'replace') {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    const nextUrl = buildUrlForView(view, nextSearch)
+    const currentUrl = `${window.location.pathname}${window.location.search}`
+
+    if (currentUrl === nextUrl) {
+      return
+    }
+
+    window.history[mode === 'push' ? 'pushState' : 'replaceState']({}, '', nextUrl)
+  }
+
   useEffect(() => {
     writeSavedFlights(savedFlights)
   }, [savedFlights])
+
+  useEffect(() => {
+    writeRecentSearches(recentSearches)
+  }, [recentSearches])
 
   useEffect(() => {
     writeAlertPreference(alertPreference)
   }, [alertPreference])
 
   useEffect(() => {
+    writeAlertDeliverySettings(alertDeliverySettings)
+  }, [alertDeliverySettings])
+
+  useEffect(() => {
+    writeAlertEvents(alertFeed)
+  }, [alertFeed])
+
+  useEffect(() => {
     if (authState.provider === 'local') {
       writeLocalAuthState(authState)
     }
   }, [authState])
+
+  useEffect(() => {
+    if (!shareStatus) {
+      return
+    }
+
+    const timeout = window.setTimeout(() => {
+      setShareStatus('')
+    }, 2400)
+
+    return () => {
+      window.clearTimeout(timeout)
+    }
+  }, [shareStatus])
+
+  useEffect(() => {
+    function handlePopState() {
+      const nextSearch = readSearchStateFromLocation(defaultSearch)
+      const nextView = readViewStateFromLocation()
+
+      startTransition(() => {
+        setActiveView(nextView)
+        setDraftSearch(nextSearch)
+        setSearch(nextSearch)
+        setSelectedFlightId('')
+      })
+    }
+
+    window.addEventListener('popstate', handlePopState)
+
+    return () => {
+      window.removeEventListener('popstate', handlePopState)
+    }
+  }, [defaultSearch, startTransition])
+
+  useEffect(() => {
+    syncLocationState(activeView, search, 'replace')
+  }, [activeView, search])
+
+  useEffect(() => {
+    updateDocumentMetadata(activeView, search)
+  }, [activeView, search])
 
   useEffect(() => {
     if (!supabase) {
@@ -277,6 +570,20 @@ function App() {
 
         if (payload?.alertPreference) {
           setAlertPreference(payload.alertPreference)
+        }
+
+        if (payload?.recentSearches?.length) {
+          setRecentSearches(payload.recentSearches)
+        }
+
+        const savedSearch = payload?.savedSearch
+
+        if (savedSearch) {
+          startTransition(() => {
+            setDraftSearch(savedSearch)
+            setSearch(savedSearch)
+            setSelectedFlightId('')
+          })
         }
 
         cloudStateReadyRef.current = true
@@ -488,17 +795,33 @@ function App() {
     }))
   }
 
-  function updateSearch(nextSearch: SearchState) {
+  function updateSearch(
+    nextSearch: SearchState,
+    options?: {
+      nextView?: AppView
+      historyMode?: 'push' | 'replace' | 'skip'
+    },
+  ) {
     const normalizedSearch = {
       ...nextSearch,
       origin: resolveAirportCode(nextSearch.origin),
       destination: resolveAirportCode(nextSearch.destination),
     }
+    const nextView = options?.nextView ?? activeView
 
     startTransition(() => {
+      setActiveView(nextView)
       setSearch(normalizedSearch)
       setSelectedFlightId('')
     })
+
+    if (options?.historyMode && options.historyMode !== 'skip') {
+      syncLocationState(nextView, normalizedSearch, options.historyMode)
+    }
+
+    setRecentSearches((current) =>
+      mergeRecentSearches([buildRecentSearchEntry(normalizedSearch), ...current]),
+    )
 
     trackEvent({
       event: 'search.updated',
@@ -533,7 +856,18 @@ function App() {
 
   function handleSearchSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    updateSearch(draftSearch)
+    updateSearch(draftSearch, {
+      nextView: 'results',
+      historyMode: 'push',
+    })
+  }
+
+  function applyStoredSearch(entry: RecentSearchEntry) {
+    setDraftSearch(entry.search)
+    updateSearch(entry.search, {
+      nextView: 'results',
+      historyMode: 'push',
+    })
   }
 
   function handleLocalSignIn() {
@@ -607,7 +941,10 @@ function App() {
     }
 
     setDraftSearch(nextSearch)
-    updateSearch(nextSearch)
+    updateSearch(nextSearch, {
+      nextView: 'map',
+      historyMode: 'push',
+    })
   }
 
   function applyHeatmapDate(date: string) {
@@ -622,7 +959,10 @@ function App() {
     }
 
     setDraftSearch(nextSearch)
-    updateSearch(nextSearch)
+    updateSearch(nextSearch, {
+      nextView: 'dates',
+      historyMode: 'push',
+    })
   }
 
   function toggleWindow(kind: 'departureWindows' | 'arrivalWindows', value: TimeBucket) {
@@ -650,6 +990,171 @@ function App() {
       ...current,
       [key]: !current[key],
     }))
+  }
+
+  async function toggleAlertDeliverySetting(key: keyof AlertDeliverySettings) {
+    if (key !== 'desktopNotifications') {
+      setAlertDeliverySettings((current) => ({
+        ...current,
+        [key]: !current[key],
+      }))
+      return
+    }
+
+    const currentlyEnabled = alertDeliverySettings.desktopNotifications
+
+    if (currentlyEnabled) {
+      setAlertDeliverySettings((current) => ({
+        ...current,
+        desktopNotifications: false,
+      }))
+      return
+    }
+
+    if (typeof Notification === 'undefined') {
+      setNotificationPermission('unsupported')
+      return
+    }
+
+    const permission =
+      Notification.permission === 'granted'
+        ? 'granted'
+        : await Notification.requestPermission()
+
+    setNotificationPermission(permission)
+
+    setAlertDeliverySettings((current) => ({
+      ...current,
+      desktopNotifications: permission === 'granted',
+    }))
+  }
+
+  const emitAlertEvent = useCallback((event: AlertEvent) => {
+    if (alertEventIdsRef.current.has(event.id)) {
+      return
+    }
+
+    alertEventIdsRef.current.add(event.id)
+
+    if (alertDeliverySettings.inAppInbox) {
+      setAlertFeed((current) => [event, ...current].slice(0, MAX_ALERT_EVENTS))
+    }
+
+    if (
+      alertDeliverySettings.desktopNotifications &&
+      typeof Notification !== 'undefined' &&
+      Notification.permission === 'granted'
+    ) {
+      new Notification(event.title, {
+        body: event.message,
+        tag: event.id,
+      })
+    }
+  }, [alertDeliverySettings.desktopNotifications, alertDeliverySettings.inAppInbox])
+
+  useEffect(() => {
+    const routeLabel = routeLabelFromSearch(search)
+    const routeSavedFlights = savedFlightsWithLivePrices.filter((flight) => flight.route === routeLabel)
+    const pendingEvents: AlertEvent[] = []
+
+    if (routeSavedFlights.length === 0 || availableResults.length === 0) {
+      return
+    }
+
+    for (const saved of routeSavedFlights) {
+      if (alertPreference.priceDrops && saved.currentPrice < saved.savedPrice) {
+        pendingEvents.push({
+          id: `price-drop:${saved.id}:${saved.currentPrice}`,
+          kind: 'price-drop',
+          title: `${saved.airline} dropped in price`,
+          message: `${saved.flightNumber} is now ${formatCurrency(saved.currentPrice)}, down from ${formatCurrency(saved.savedPrice)}.`,
+          route: saved.route,
+          createdAt: new Date().toISOString(),
+        })
+      }
+
+      if (alertPreference.preferredAirlineDrop) {
+        const airlineDeal = availableResults.find(
+          (flight) => flight.airline === saved.airline && flight.totalPrice < saved.savedPrice,
+        )
+
+        if (airlineDeal) {
+          pendingEvents.push({
+            id: `preferred-airline:${saved.id}:${airlineDeal.id}:${airlineDeal.totalPrice}`,
+            kind: 'preferred-airline-drop',
+            title: `${saved.airline} has a better fare`,
+            message: `${saved.airline} now has a ${formatCurrency(airlineDeal.totalPrice)} option on ${routeLabel}.`,
+            route: routeLabel,
+            createdAt: new Date().toISOString(),
+          })
+        }
+      }
+    }
+
+    if (alertPreference.directFlightAvailable) {
+      const directFlight = availableResults.find((flight) => flight.stops === 0)
+
+      if (directFlight) {
+        pendingEvents.push({
+          id: `direct-flight:${routeLabel}:${directFlight.id}`,
+          kind: 'direct-flight',
+          title: 'Direct flight available',
+          message: `${directFlight.airline} now has a nonstop option for ${routeLabel}.`,
+          route: routeLabel,
+          createdAt: new Date().toISOString(),
+        })
+      }
+    }
+
+    if (alertPreference.nearlySoldOut && availableResults.length <= 2) {
+      pendingEvents.push({
+        id: `nearly-sold-out:${routeLabel}:${availableResults.length}`,
+        kind: 'nearly-sold-out',
+        title: 'Watchlist route is thinning out',
+        message: `Only ${availableResults.length} live result${availableResults.length === 1 ? '' : 's'} are currently visible for ${routeLabel}.`,
+        route: routeLabel,
+        createdAt: new Date().toISOString(),
+      })
+    }
+
+    if (pendingEvents.length === 0) {
+      return
+    }
+
+    queueMicrotask(() => {
+      pendingEvents.forEach((event) => emitAlertEvent(event))
+    })
+  }, [alertPreference, availableResults, emitAlertEvent, savedFlightsWithLivePrices, search])
+
+  function sendTestAlert() {
+    emitAlertEvent({
+      id: `test:${Date.now()}`,
+      kind: 'test',
+      title: 'Flight Tracker Pro alert test',
+      message: `Delivery channels are active for ${routeLabelFromSearch(search)}.`,
+      route: routeLabelFromSearch(search),
+      createdAt: new Date().toISOString(),
+    })
+  }
+
+  function navigateToView(view: AppView) {
+    setActiveView(view)
+    syncLocationState(view, search, 'push')
+  }
+
+  async function copyShareLink() {
+    const baseUrl =
+      typeof window !== 'undefined' && /^https?:$/.test(window.location.protocol)
+        ? window.location.origin
+        : 'https://flightrackerpro.app'
+    const shareUrl = `${baseUrl}${buildUrlForView(activeView, search)}`
+
+    try {
+      await navigator.clipboard.writeText(shareUrl)
+      setShareStatus('Share link copied.')
+    } catch {
+      setShareStatus(shareUrl)
+    }
   }
 
   function toggleSaveFlight(flight: FlightResult) {
@@ -703,6 +1208,47 @@ function App() {
   const trendSourceLabel = liveRouteIntel?.sources.benchmark ?? 'Live provider benchmark'
   const heatmapSourceLabel = liveRouteIntel?.sources.calendar ?? 'Live provider date pricing'
   const mapSourceLabel = liveRouteIntel?.sources.destinations ?? 'Live provider inspiration fares'
+  const routeLabel = routeLabelFromSearch(search)
+  const activeViewLabel = viewOptions.find((option) => option.value === activeView)?.label ?? 'Results'
+  const viewSummaryByType: Record<
+    AppView,
+    { eyebrow: string; title: string; description: string }
+  > = {
+    results: {
+      eyebrow: 'Results View',
+      title: resultsSummary,
+      description: `Ranked by ${sortOptions.find((option) => option.value === sortMode)?.label.toLowerCase()}. ${routeInsight?.summary ?? 'Switch to a supported route like DFW → MIA, DFW → DEN, or JFK → LAX.'}`,
+    },
+    dates: {
+      eyebrow: 'Flexible Dates',
+      title: `Explore cheaper date windows for ${routeLabel}`,
+      description:
+        heatmapCalendar.length > 0
+          ? `Use the live date surface to compare sampled prices around ${search.departureDate}.`
+          : 'Sampled live cheapest-date pricing is not available for this search yet.',
+    },
+    map: {
+      eyebrow: 'Destination Map',
+      title: `Scan alternative destinations from ${search.origin}`,
+      description:
+        explorerDestinations.length > 0
+          ? `Compare live inspiration fares against your current search for ${routeLabel}.`
+          : `Sampled live destination pricing is not available from ${search.origin} yet.`,
+    },
+    saved: {
+      eyebrow: 'Saved Watches',
+      title: `Track watched flights and route alerts for ${routeLabel}`,
+      description:
+        savedFlightsWithLivePrices.length > 0
+          ? 'Your saved shortlist and alert feed are grouped here for quicker follow-up.'
+          : 'Save a flight from Results to start tracking price movement and alert triggers here.',
+    },
+  }
+  const viewSummary = viewSummaryByType[activeView]
+  const showingResultsView = activeView === 'results'
+  const showingDatesView = activeView === 'dates'
+  const showingMapView = activeView === 'map'
+  const showingSavedView = activeView === 'saved'
 
   return (
     <div className="app-shell">
@@ -866,7 +1412,7 @@ function App() {
               <p>
                 {livePricingEnabled
                   ? 'Live pricing mode is active. No simulated fare fallback will be shown if the provider returns no offers.'
-                  : 'Live pricing is not configured yet, so no fare inventory will be shown.'}
+                  : 'Live pricing is currently off because no live API endpoint is configured.'}
               </p>
               <button type="submit" className="primary-button" data-testid="search-submit">
                 {isPending ? 'Refreshing route...' : 'Search flights'}
@@ -876,8 +1422,9 @@ function App() {
         </section>
       </header>
 
-      <main className="workspace">
-        <aside className="filters-panel">
+      <main className={showingResultsView ? 'workspace' : 'workspace workspace-single'}>
+        {showingResultsView ? (
+          <aside className="filters-panel">
           <div className="section-intro">
             <div>
               <span className="eyebrow">Filters</span>
@@ -1103,68 +1650,112 @@ function App() {
               ))}
             </div>
           </div>
-        </aside>
+          </aside>
+        ) : null}
 
         <section className="content-column">
-          <div className="results-toolbar">
-            <div>
-              <span className="eyebrow">Results View</span>
-              <h2 data-testid="results-summary">{resultsSummary}</h2>
-              <p>
-                Ranked by {sortOptions.find((option) => option.value === sortMode)?.label.toLowerCase()}.
-                {' '}
-                {routeInsight?.summary ??
-                  'Switch to a supported route like DFW → MIA, DFW → DEN, or JFK → LAX.'}
-              </p>
+          <section className="panel view-switcher">
+            <div className="section-intro">
+              <div>
+                <span className="eyebrow">Views</span>
+                <h2>{activeViewLabel} route workspace</h2>
+              </div>
+              <span className="section-aside">Deep link ready</span>
             </div>
 
-            <label className="sort-select">
-              <span>Sort by</span>
-              <select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)}>
-                {sortOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
+            <div className="view-switcher-row">
+              <div className="view-tab-row" role="tablist" aria-label="Flight Tracker Pro views">
+                {viewOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    role="tab"
+                    aria-selected={activeView === option.value}
+                    className={activeView === option.value ? 'view-tab active' : 'view-tab'}
+                    onClick={() => navigateToView(option.value)}
+                  >
                     {option.label}
-                  </option>
+                  </button>
                 ))}
-              </select>
-            </label>
+              </div>
+
+              <div className="view-share-box">
+                <div>
+                  <strong>Share this route view</strong>
+                  <span>
+                    Current link preserves the screen and search for {routeLabel}.
+                  </span>
+                </div>
+                <button type="button" className="ghost-button" onClick={copyShareLink}>
+                  Copy link
+                </button>
+              </div>
+            </div>
+
+            {shareStatus ? <p className="view-share-status">{shareStatus}</p> : null}
+          </section>
+
+          <div className="results-toolbar">
+            <div>
+              <span className="eyebrow">{viewSummary.eyebrow}</span>
+              <h2 data-testid="results-summary">{viewSummary.title}</h2>
+              <p>{viewSummary.description}</p>
+            </div>
+
+            {showingResultsView ? (
+              <label className="sort-select">
+                <span>Sort by</span>
+                <select
+                  value={sortMode}
+                  onChange={(event) => setSortMode(event.target.value as SortMode)}
+                >
+                  {sortOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
           </div>
 
-          <div className="intel-grid">
-            <TrendChart
-              insight={routeInsight}
-              bestFare={bestFlight?.pricePerTraveler}
-              sourceLabel={trendSourceLabel}
-              note={
-                dataMode === 'live'
-                  ? 'This card uses sampled live provider fares. It is a directional benchmark, not a guaranteed forward forecast.'
-                  : 'This card is unavailable until live pricing is configured.'
-              }
-              emptyMessage={
-                dataMode === 'live'
-                  ? 'Live benchmark intelligence is not available for this search yet.'
-                  : 'Select a supported route to unlock fare history and trend intelligence.'
-              }
-            />
-            <ContextPanel
-              flight={selectedFlight}
-              insight={routeInsight}
-              recommendation={recommendation}
-              weatherSummary={weatherSummary}
-              recommendationSource={
-                dataMode === 'live'
-                  ? routeInsight
-                    ? 'Live offer plus sampled provider benchmark'
-                    : 'Live offer only'
-                  : 'Simulated recommendation model'
-              }
-              supportNote={
-                dataMode === 'live'
-                  ? 'Buy/wait guidance is benchmarked from sampled live provider data where available. It is advisory, not a booking guarantee.'
-                  : 'This recommendation becomes available when live pricing is configured.'
-              }
-            />
-          </div>
+          {!showingSavedView ? (
+            <div className="intel-grid">
+              <TrendChart
+                insight={routeInsight}
+                bestFare={bestFlight?.pricePerTraveler}
+                sourceLabel={trendSourceLabel}
+                note={
+                  dataMode === 'live'
+                    ? 'This card uses sampled live provider fares. It is a directional benchmark, not a guaranteed forward forecast.'
+                    : 'This card is unavailable until live pricing is configured.'
+                }
+                emptyMessage={
+                  dataMode === 'live'
+                    ? 'Live benchmark intelligence is not available for this search yet.'
+                    : 'Select a supported route to unlock fare history and trend intelligence.'
+                }
+              />
+              <ContextPanel
+                flight={selectedFlight}
+                insight={routeInsight}
+                recommendation={recommendation}
+                weatherSummary={weatherSummary}
+                recommendationSource={
+                  dataMode === 'live'
+                    ? routeInsight
+                      ? 'Live offer plus sampled provider benchmark'
+                      : 'Live offer only'
+                    : 'Simulated recommendation model'
+                }
+                supportNote={
+                  dataMode === 'live'
+                    ? 'Buy/wait guidance is benchmarked from sampled live provider data where available. It is advisory, not a booking guarantee.'
+                    : 'This recommendation becomes available when live pricing is configured.'
+                }
+              />
+            </div>
+          ) : null}
 
           <div className="support-grid">
             <DataModePanel
@@ -1187,7 +1778,13 @@ function App() {
             <AboutPanel />
           </div>
 
-          {routeInsight || heatmapCalendar.length > 0 ? (
+          <RecentSearchesPanel
+            searches={recentSearches}
+            syncStatus={accountSyncStatus}
+            onSelect={applyStoredSearch}
+          />
+
+          {showingDatesView && (routeInsight || heatmapCalendar.length > 0) ? (
             <DateHeatmap
               calendar={heatmapCalendar}
               selectedDate={search.departureDate}
@@ -1198,74 +1795,94 @@ function App() {
             />
           ) : null}
 
-          <DestinationMap
-            origin={search.origin}
-            selectedDestination={search.destination}
-            destinations={explorerDestinations}
-            onSelectDestination={applyDestination}
-            searchedRouteLabel={`${search.origin} → ${search.destination}`}
-            sourceLabel={mapSourceLabel}
-            emptyMessage={`Sampled live destination pricing is not available from ${search.origin} yet.`}
-          />
-
-          <SavedFlightsPanel flights={savedFlightsWithLivePrices} syncStatus={accountSyncStatus} />
-
-          <div className="support-grid">
-            <AlertCenterPanel
-              preferences={alertPreference}
-              authState={authState}
-              syncStatus={accountSyncStatus}
-              onToggle={toggleAlertSetting}
+          {showingMapView ? (
+            <DestinationMap
+              origin={search.origin}
+              selectedDestination={search.destination}
+              destinations={explorerDestinations}
+              onSelectDestination={applyDestination}
+              searchedRouteLabel={`${search.origin} → ${search.destination}`}
+              sourceLabel={mapSourceLabel}
+              emptyMessage={`Sampled live destination pricing is not available from ${search.origin} yet.`}
             />
-            <PremiumPlansPanel plans={premiumPlans} />
-          </div>
-
-          <section className="results-list" data-testid="results-list">
-            {deferredResults.length > 0 ? (
-              deferredResults.map((flight) => (
-                <FlightCard
-                  key={flight.id}
-                  flight={flight}
-                  selected={selectedFlight?.id === flight.id}
-                  onSelect={() => setSelectedFlightId(flight.id)}
-                  onToggleSave={() => toggleSaveFlight(flight)}
-                  saved={savedFlightsWithLivePrices.some((saved) => saved.id === flight.id)}
-                />
-              ))
-            ) : (
-              <div className="panel empty-panel" data-testid="empty-results">
-                <h3>No flights match this stack</h3>
-                <p>
-                  {dataMode === 'live'
-                    ? `No live fares came back for ${search.origin} to ${search.destination}. Try widening the price range, allowing one stop, changing the dates, or using the alternative destination explorer below. No simulated fallback fares are being shown.`
-                    : 'Try widening the price range, allowing one stop, or switching to one of the map explorer destinations.'}
-                </p>
-              </div>
-            )}
-          </section>
-
-          {selectedFlight ? (
-            <div className="results-footer">
-              <span className="eyebrow">Selected flight snapshot</span>
-              <p>
-                {selectedFlight.airline} {selectedFlight.flightNumber} is currently{' '}
-                {selectedFlight.dealLabel.toLowerCase()} at {formatCurrency(selectedFlight.totalPrice)}.
-                {' '}
-                {selectedSaved ? 'This option is already saved for alerts.' : 'Save it to track changes.'}
-              </p>
-            </div>
           ) : null}
 
-          <section className="next-steps-panel">
-            <span className="eyebrow">Build next</span>
-            <h2>Choose the next layer for Flight Tracker Pro</h2>
-            <div className="next-step-grid">
-              <article>1. real API integrations</article>
-              <article>2. authentication and saved alerts</article>
-              <article>3. mobile optimization</article>
-              <article>4. premium subscription features</article>
-            </div>
-          </section>
+          {showingSavedView ? (
+            <>
+              <SavedFlightsPanel
+                flights={savedFlightsWithLivePrices}
+                syncStatus={accountSyncStatus}
+              />
+
+              <div className="support-grid">
+                <AlertCenterPanel
+                  preferences={alertPreference}
+                  deliverySettings={alertDeliverySettings}
+                  alertFeed={alertFeed}
+                  authState={authState}
+                  notificationPermission={notificationPermission}
+                  syncStatus={accountSyncStatus}
+                  onTogglePreference={toggleAlertSetting}
+                  onToggleDelivery={toggleAlertDeliverySetting}
+                  onSendTestAlert={sendTestAlert}
+                />
+                <PremiumPlansPanel plans={premiumPlans} />
+              </div>
+            </>
+          ) : null}
+
+          {showingResultsView ? (
+            <>
+              <section className="results-list" data-testid="results-list">
+                {deferredResults.length > 0 ? (
+                  deferredResults.map((flight) => (
+                    <FlightCard
+                      key={flight.id}
+                      flight={flight}
+                      selected={selectedFlight?.id === flight.id}
+                      onSelect={() => setSelectedFlightId(flight.id)}
+                      onToggleSave={() => toggleSaveFlight(flight)}
+                      saved={savedFlightsWithLivePrices.some((saved) => saved.id === flight.id)}
+                    />
+                  ))
+                ) : (
+                  <div className="panel empty-panel" data-testid="empty-results">
+                    <h3>No flights match this stack</h3>
+                    <p>
+                      {dataMode === 'live'
+                        ? `No live fares came back for ${search.origin} to ${search.destination}. Try widening the price range, allowing one stop, changing the dates, or using the alternative destination explorer below. No simulated fallback fares are being shown.`
+                        : 'Try widening the price range, allowing one stop, or switching to one of the map explorer destinations.'}
+                    </p>
+                  </div>
+                )}
+              </section>
+
+              {selectedFlight ? (
+                <div className="results-footer">
+                  <span className="eyebrow">Selected flight snapshot</span>
+                  <p>
+                    {selectedFlight.airline} {selectedFlight.flightNumber} is currently{' '}
+                    {selectedFlight.dealLabel.toLowerCase()} at {formatCurrency(selectedFlight.totalPrice)}.
+                    {' '}
+                    {selectedSaved ? 'This option is already saved for alerts.' : 'Save it to track changes.'}
+                  </p>
+                </div>
+              ) : null}
+            </>
+          ) : null}
+
+          {showingResultsView ? (
+            <section className="next-steps-panel">
+              <span className="eyebrow">Build next</span>
+              <h2>Choose the next layer for Flight Tracker Pro</h2>
+              <div className="next-step-grid">
+                <article>1. real API integrations</article>
+                <article>2. authentication and saved alerts</article>
+                <article>3. mobile optimization</article>
+                <article>4. premium subscription features</article>
+              </div>
+            </section>
+          ) : null}
         </section>
       </main>
 

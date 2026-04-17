@@ -441,7 +441,7 @@ export async function fetchDestinationWeather(airportCode: string): Promise<Weat
   }
 
   const current = payload.current
-  if (!current?.temperature_2m || !current.wind_speed_10m) {
+  if (current?.temperature_2m == null || current.wind_speed_10m == null) {
     return null
   }
 

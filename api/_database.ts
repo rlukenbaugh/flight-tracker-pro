@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import type { AlertPreference, SavedFlight, SearchState } from '../src/types.js'
+import type { AlertPreference, RecentSearchEntry, SavedFlight, SearchState } from '../src/types.js'
 import { logServerEvent, readSingle, type HandlerRequest } from './_http.js'
 
 type JsonValue =
@@ -62,7 +62,7 @@ export async function loadUserState(userId: string) {
     return null
   }
 
-  const [savedFlightsResponse, alertResponse] = await Promise.all([
+  const [savedFlightsResponse, alertResponse, recentSearchesResponse] = await Promise.all([
     client
       .from('saved_flights')
       .select(
@@ -77,6 +77,12 @@ export async function loadUserState(userId: string) {
       )
       .eq('user_id', userId)
       .maybeSingle(),
+    client
+      .from('saved_searches')
+      .select('route_key, last_seen_at, search_payload')
+      .eq('user_id', userId)
+      .order('last_seen_at', { ascending: false })
+      .limit(6),
   ])
 
   if (savedFlightsResponse.error) {
@@ -85,6 +91,10 @@ export async function loadUserState(userId: string) {
 
   if (alertResponse.error) {
     throw alertResponse.error
+  }
+
+  if (recentSearchesResponse.error) {
+    throw recentSearchesResponse.error
   }
 
   const savedFlights: SavedFlight[] =
@@ -109,9 +119,28 @@ export async function loadUserState(userId: string) {
       }
     : undefined
 
+  const recentSearches: RecentSearchEntry[] =
+    recentSearchesResponse.data
+      ?.map((row) => {
+        if (!row.search_payload || typeof row.search_payload !== 'object') {
+          return null
+        }
+
+        return {
+          id: row.route_key,
+          search: row.search_payload as SearchState,
+          lastViewedAt: row.last_seen_at,
+        } satisfies RecentSearchEntry
+      })
+      .filter((entry): entry is RecentSearchEntry => Boolean(entry)) ?? []
+
+  const savedSearch = recentSearches[0]?.search
+
   return {
     savedFlights,
     alertPreference,
+    savedSearch,
+    recentSearches,
   }
 }
 

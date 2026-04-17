@@ -19,6 +19,8 @@ export default defineConfig({
     env: {
       ...process.env,
       VITE_ENABLE_LIVE_FLIGHTS: 'true',
+      VITE_SUPABASE_URL: 'https://demo.supabase.co',
+      VITE_SUPABASE_ANON_KEY: 'public-anon-key',
     },
     reuseExistingServer: true,
     timeout: 60_000,

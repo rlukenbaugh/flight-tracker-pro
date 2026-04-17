@@ -1,10 +1,12 @@
-import type { AlertPreference, SavedFlight, SearchState } from '../types'
+import type { AlertPreference, RecentSearchEntry, SavedFlight, SearchState } from '../types'
 import { buildApiUrl } from './runtimeConfig'
 import { supabase } from './supabase'
 
 interface CloudUserStateResponse {
   savedFlights?: SavedFlight[]
   alertPreference?: AlertPreference
+  savedSearch?: SearchState
+  recentSearches?: RecentSearchEntry[]
 }
 
 interface CloudUserStatePayload {
