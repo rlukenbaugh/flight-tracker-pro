@@ -1,0 +1,12 @@
+.git
+.github
+.vercel
+node_modules
+release
+tmp
+output
+playwright-report
+test-results
+dist
+dist-ssr
+*.local
